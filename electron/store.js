@@ -19,7 +19,8 @@ const DEFAULTS = () => ({
     privateKeyPath: defaultKeyPath(),
     port: 22,
     profile: 'default',
-    hermesHome: ''
+    hermesHome: '',
+    auth: 'key'
   },
   ui: { motion: 'always', lastHostId: null, lastTab: 'overview' },
   hosts: []
@@ -92,13 +93,17 @@ const getHost = (id) => hydrate(cache.hosts.find((h) => h.id === id) || null);
 
 function saveHost(input) {
   const d = cache.defaults;
+  const auth = input.auth === 'password' ? 'password' : 'key';
   const host = {
     id: input.id || crypto.randomUUID(),
     label: (input.label || '').trim() || (input.hostname || '').trim(),
     hostname: (input.hostname || '').trim(),
     port: Number(input.port) || d.port || 22,
     username: (input.username || '').trim() || d.username,
-    privateKeyPath: (input.privateKeyPath || '').trim() || d.privateKeyPath,
+    auth,
+    // Never a password — only whether one was saved to the OS keychain.
+    savePassword: auth === 'password' ? Boolean(input.savePassword) : false,
+    privateKeyPath: auth === 'password' ? '' : ((input.privateKeyPath || '').trim() || d.privateKeyPath),
     hermesHome: (input.hermesHome || '').trim() || d.hermesHome || '',
     defaultProfile: (input.defaultProfile || '').trim() || d.profile || 'default'
   };
@@ -121,6 +126,7 @@ const getDefaults = () => ({ ...cache.defaults });
 function setDefaults(patch) {
   cache.defaults = { ...cache.defaults, ...patch };
   if (!cache.defaults.port) cache.defaults.port = 22;
+  if (cache.defaults.auth !== 'password') cache.defaults.auth = 'key';
   persist();
   return getDefaults();
 }
@@ -188,6 +194,7 @@ function importSshConfig() {
       hostname,
       port: e.port || cache.defaults.port,
       username: e.username || cache.defaults.username,
+      auth: 'key',
       privateKeyPath: e.identityFile || cache.defaults.privateKeyPath
     });
     added++;

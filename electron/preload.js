@@ -17,6 +17,12 @@ contextBridge.exposeInMainWorld('api', {
     defaultKey: () => invoke('hosts:defaultKey'),
     importSshConfig: () => invoke('hosts:importSshConfig')
   },
+  creds: {
+    available: () => invoke('creds:available'),
+    has: (id) => invoke('creds:has', id),
+    set: (id, password) => invoke('creds:set', id, password),
+    remove: (id) => invoke('creds:remove', id)
+  },
   settings: {
     getDefaults: () => invoke('defaults:get'),
     setDefaults: (patch) => invoke('defaults:set', patch),
@@ -29,7 +35,7 @@ contextBridge.exposeInMainWorld('api', {
     set: (patch) => invoke('ui:set', patch)
   },
   ssh: {
-    connect: (id, passphrase) => invoke('ssh:connect', id, passphrase),
+    connect: (id, secret) => invoke('ssh:connect', id, secret),
     disconnect: (id) => invoke('ssh:disconnect', id),
     status: (id) => invoke('ssh:status', id),
     exec: (id, cmd) => invoke('ssh:exec', id, cmd),

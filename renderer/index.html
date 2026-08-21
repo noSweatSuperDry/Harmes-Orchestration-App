@@ -96,8 +96,25 @@
           <label class="field grow"><span>Default profile</span>
             <input name="defaultProfile" value="default" autocomplete="off" /></label>
         </div>
-        <label class="field"><span>Private key path</span>
-          <input name="privateKeyPath" autocomplete="off" /></label>
+        <label class="field"><span>Authentication</span>
+          <select name="auth">
+            <option value="key">SSH key</option>
+            <option value="password">Password</option>
+          </select></label>
+
+        <div id="auth-key">
+          <label class="field"><span>Private key path</span>
+            <input name="privateKeyPath" autocomplete="off" /></label>
+        </div>
+
+        <div id="auth-password" hidden>
+          <label class="field"><span>Password</span>
+            <input name="password" type="password" autocomplete="off" /></label>
+          <label class="field-inline" style="margin-bottom:8px">
+            <input type="checkbox" name="savePassword" style="width:auto" />
+            <span>Remember in OS keychain</span></label>
+          <p class="hint" id="keychain-note" style="margin:0 0 12px"></p>
+        </div>
         <label class="field"><span>Hermes home <em>(blank = $HERMES_HOME or ~/.hermes)</em></span>
           <input name="hermesHome" placeholder="" autocomplete="off" /></label>
         <div class="modal-actions">
@@ -124,11 +141,11 @@
   <!-- Passphrase -->
   <div class="modal-backdrop" id="pass-modal" hidden>
     <div class="modal narrow">
-      <h2>Key passphrase</h2>
+      <h2 id="pass-title">Key passphrase</h2>
       <p id="pass-hint" class="muted sm">This key is encrypted.</p>
       <p class="muted sm">Used once for this connection and never written to disk.</p>
       <form id="pass-form">
-        <label class="field"><span>Passphrase</span>
+        <label class="field"><span id="pass-label">Passphrase</span>
           <input name="passphrase" type="password" autocomplete="off" /></label>
         <div class="modal-actions">
           <span class="grow"></span>

@@ -5,6 +5,7 @@ const store = require('./store');
 const ssh = require('./ssh-manager');
 const hermes = require('./hermes');
 const telemetry = require('./telemetry');
+const credentials = require('./credentials');
 
 let win = null;
 
@@ -63,7 +64,12 @@ const handle = (channel, fn) => {
     try {
       return { ok: true, data: await fn(...args) };
     } catch (err) {
-      return { ok: false, error: err.message || String(err), needsPassphrase: !!err.needsPassphrase };
+      return {
+        ok: false,
+        error: err.message || String(err),
+        needsPassphrase: !!err.needsPassphrase,
+        needsPassword: !!err.needsPassword
+      };
     }
   });
 };
@@ -76,7 +82,13 @@ const hostOf = (id) => {
 
 handle('hosts:list', () => store.listHosts());
 handle('hosts:save', (input) => store.saveHost(input));
-handle('hosts:delete', (id) => { ssh.disconnect(id); hermes.forgetHome(id); store.deleteHost(id); return true; });
+handle('hosts:delete', (id) => {
+  ssh.disconnect(id);
+  hermes.forgetHome(id);
+  credentials.remove(id);
+  store.deleteHost(id);
+  return true;
+});
 handle('hosts:defaultKey', () => store.defaultKeyPath());
 handle('hosts:importSshConfig', () => store.importSshConfig());
 handle('defaults:get', () => store.getDefaults());
@@ -91,14 +103,21 @@ handle('config:reveal', () => {
 handle('ui:get', () => store.getUi());
 handle('ui:set', (patch) => store.setUi(patch));
 
-handle('ssh:connect', (id, passphrase) => connectAndDescribe(id, passphrase));
+handle('ssh:connect', (id, secret) => connectAndDescribe(id, secret));
 handle('ssh:disconnect', (id) => { ssh.disconnect(id); hermes.forgetHome(id); return true; });
 handle('ssh:status', (id) => ssh.statusFor(id));
 handle('ssh:exec', (id, cmd) => ssh.exec(id, cmd));
 
-async function connectAndDescribe(id, passphrase) {
+async function connectAndDescribe(id, secret) {
   const host = hostOf(id);
-  await ssh.connect(host, { passphrase });
+  const opts = {};
+  if (host.auth === 'password') {
+    // Prefer what the user just typed; otherwise fall back to the keychain.
+    opts.password = secret || credentials.get(id) || '';
+  } else {
+    opts.passphrase = secret;
+  }
+  await ssh.connect(host, opts);
   hermes.forgetHome(id);
   const home = await hermes.resolveHome(id, host.hermesHome);
   const profiles = await hermes.listProfiles(id, host.hermesHome);
@@ -116,6 +135,11 @@ handle('hermes:saveEnv', (id, profile, entries) =>
   hermes.saveEnv(id, profile, entries, hostOf(id).hermesHome));
 handle('hermes:saveMemory', (id, profile, which, text) =>
   hermes.saveMemory(id, profile, which, text, hostOf(id).hermesHome));
+
+handle('creds:available', () => credentials.available());
+handle('creds:has', (id) => credentials.has(id));
+handle('creds:set', (id, password) => credentials.set(id, password));
+handle('creds:remove', (id) => credentials.remove(id));
 
 handle('telemetry:collect', (id) => telemetry.collect(id));
 handle('telemetry:pulse', (id) => telemetry.pulse(id));

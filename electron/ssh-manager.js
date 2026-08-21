@@ -67,6 +67,9 @@ function loadKey(keyPath, passphrase) {
 function describeFailure(err, host, keyLoaded) {
   const msg = err.message || String(err);
   if (err.level === 'client-authentication' || /authentication methods failed/i.test(msg)) {
+    if (host.auth === 'password') {
+      return `Password rejected by ${host.hostname}. Check the password, and that the server allows password login (PasswordAuthentication yes).`;
+    }
     return keyLoaded
       ? `Server rejected the key. Is this key's public half in ~${host.username}/.ssh/authorized_keys on ${host.hostname}?`
       : `Authentication failed and no usable key was loaded for ${host.username}@${host.hostname}.`;
@@ -100,25 +103,45 @@ function doConnect(host, opts, s) {
       readyTimeout: 20000
     };
 
+    const usePassword = host.auth === 'password';
     let keyLoaded = false;
-    if (host.privateKeyPath) {
-      let loaded;
-      try {
-        loaded = loadKey(host.privateKeyPath, opts.passphrase);
-      } catch (err) {
-        setStatus(host.id, 'error', err.message);
+
+    if (usePassword) {
+      if (!opts.password) {
+        const err = new Error('Password required');
+        err.needsPassword = true;
+        setStatus(host.id, 'error', 'Password required');
         return reject(err);
       }
-      config.privateKey = loaded.key;
-      // Only hand ssh2 a passphrase when the key actually wants one.
-      if (loaded.encrypted && opts.passphrase) config.passphrase = opts.passphrase;
-      keyLoaded = true;
+      config.password = opts.password;
+      // Many sshd configs answer with keyboard-interactive rather than plain
+      // password auth; without this they look like an outright rejection.
+      config.tryKeyboard = true;
+    } else {
+      if (host.privateKeyPath) {
+        let loaded;
+        try {
+          loaded = loadKey(host.privateKeyPath, opts.passphrase);
+        } catch (err) {
+          setStatus(host.id, 'error', err.message);
+          return reject(err);
+        }
+        config.privateKey = loaded.key;
+        // Only hand ssh2 a passphrase when the key actually wants one.
+        if (loaded.encrypted && opts.passphrase) config.passphrase = opts.passphrase;
+        keyLoaded = true;
+      }
+      // The agent is a fallback, never a replacement for an explicit key.
+      if (process.env.SSH_AUTH_SOCK) config.agent = process.env.SSH_AUTH_SOCK;
     }
 
-    // The agent is a fallback, never a replacement for an explicit key.
-    if (process.env.SSH_AUTH_SOCK) config.agent = process.env.SSH_AUTH_SOCK;
-
     const client = new Client();
+
+    if (usePassword) {
+      client.on('keyboard-interactive', (_name, _instr, _lang, prompts, finish) => {
+        finish(prompts.map(() => opts.password));
+      });
+    }
     let settled = false;
 
     client.on('ready', () => {

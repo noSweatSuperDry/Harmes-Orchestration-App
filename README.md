@@ -18,6 +18,26 @@ npm start
 On first launch, open **Settings** (bottom of the sidebar) and set your SSH username and key path,
 then add a host — or hit **Scan and import** to pull every machine out of your `~/.ssh/config`.
 
+## Authentication
+
+Two ways in, chosen per host in the Add-host dialog (with a default in **Settings**):
+
+**SSH key** — uses `~/.ssh/id_ed25519` or whatever you point it at, plus your `ssh-agent` when
+`SSH_AUTH_SOCK` is set. Passphrase-protected keys prompt once per connection; the passphrase is
+never written to disk.
+
+**Password** — for boxes that don't have your key yet, typically a local VM or a fresh VPS. Enter
+the IP, username and password. Both plain `password` auth and `keyboard-interactive` are supported,
+so servers configured with `KbdInteractiveAuthentication yes` work too.
+
+Passwords are **never written to `config.json`**. Tick *Remember in OS keychain* and the password is
+encrypted with Electron's `safeStorage` — Keychain on macOS, DPAPI on Windows, libsecret on Linux —
+and kept in a separate file alongside the app's data. Leave it unticked and you'll be asked on every
+connect, with nothing persisted at all. On a system with no keychain available the app says so and
+falls back to prompting.
+
+Deleting a host deletes its stored password.
+
 ## Configuration
 
 Hosts and defaults live in a plain JSON file you can read, edit, back up, and copy between machines:
@@ -58,14 +78,15 @@ Edit it by hand or through **Settings** — the two stay in sync, and **Reload f
 external edits without restarting. `~` is expanded in key paths. The file is written `0600` inside
 a `0700` directory.
 
-> **It stores the *path* to your private key, never the key itself.** It does still name your
-> servers, so keep it out of public repos — the shipped `.gitignore` already excludes `config.json`.
+> **No secrets live here.** Key hosts store the *path* to a private key; password hosts store only
+> `"savePassword": true`, never the password. The file does name your servers, so keep it out of
+> public repos — the shipped `.gitignore` already excludes `config.json`.
 
 ### Settings
 
 | Section | What it does |
 | --- | --- |
-| **Connection defaults** | Username, port, key path, Hermes profile and home — pre-filled for every new host |
+| **Connection defaults** | Username, port, auth method, key path, Hermes profile and home — pre-filled for every new host |
 | **Appearance** | Agent animation: `Always on` / `Follow system` / `Off` |
 | **Config file** | Shows the path, reveals it in your file manager, reloads it from disk |
 | **Import** | Adds a host per `Host` entry in `~/.ssh/config`, skipping wildcards and duplicates |

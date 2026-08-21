@@ -53,15 +53,20 @@ async function init() {
   syncPolling();
 }
 
+const asError = (res) => Object.assign(new Error(res.error), {
+  needsPassphrase: res.needsPassphrase,
+  needsPassword: res.needsPassword
+});
+
 function unwrap(res) {
   if (!res) return null;
   if (res.ok) return res.data;
-  throw Object.assign(new Error(res.error), { needsPassphrase: res.needsPassphrase });
+  throw asError(res);
 }
 
 async function call(fn, ...args) {
   const res = await fn(...args);
-  if (res && res.ok === false) throw Object.assign(new Error(res.error), { needsPassphrase: res.needsPassphrase });
+  if (res && res.ok === false) throw asError(res);
   return res ? res.data : null;
 }
 
@@ -228,31 +233,45 @@ function renderTopbar() {
   sel.disabled = st !== 'connected';
 }
 
-async function onConnectClick(passphrase) {
+async function onConnectClick(secret) {
   const host = currentHost();
   if (!host) return;
   if (currentStatus() === 'connected') {
     await call(window.api.ssh.disconnect, host.id);
     return;
   }
+  const typed = typeof secret === 'string' ? secret : undefined;
   try {
-    const info = await call(window.api.ssh.connect, host.id, typeof passphrase === 'string' ? passphrase : undefined);
+    const info = await call(window.api.ssh.connect, host.id, typed);
+    if (typed && host.auth === 'password' && host.savePassword) {
+      // The keychain entry was missing or stale — refresh it now that one works.
+      call(window.api.creds.set, host.id, typed).catch(() => {});
+    }
     state.profiles = info.profiles.length ? info.profiles : ['default'];
     if (!state.profiles.includes(state.profile)) state.profile = state.profiles[0];
     renderTopbar();
     toast(`Connected · Hermes home ${info.home}`, 'ok');
     await loadHostData({ force: true });
   } catch (err) {
-    if (err.needsPassphrase) return askPassphrase(err.message);
+    if (err.needsPassphrase) return askSecret('passphrase', err.message);
+    if (err.needsPassword) return askSecret('password', err.message);
     toast(err.message, 'err');
   }
 }
 
-function askPassphrase(message) {
+function askSecret(kind, message) {
+  const isPassword = kind === 'password';
+  const host = currentHost();
   const modal = $('#pass-modal');
   const hint = $('#pass-hint');
-  hint.textContent = message || 'This key is encrypted.';
-  hint.className = message && /did not unlock/i.test(message) ? 'badge err' : 'muted sm';
+
+  $('#pass-title').textContent = isPassword ? 'SSH password' : 'Key passphrase';
+  $('#pass-label').textContent = isPassword ? `Password for ${host?.username}@${host?.hostname}` : 'Passphrase';
+  hint.textContent = isPassword
+    ? (message && !/^Password required$/i.test(message) ? message : 'This host authenticates with a password.')
+    : (message || 'This key is encrypted.');
+  const rejected = message && /(did not unlock|rejected)/i.test(message);
+  hint.className = rejected ? 'badge err' : 'muted sm';
   modal.hidden = false;
   const form = $('#pass-form');
   form.passphrase.value = '';
@@ -756,15 +775,56 @@ function openHostModal(host) {
   form.hostId.value = host?.id || '';
   form.label.value = host?.label || '';
   form.hostname.value = host?.hostname || '';
+  form.password.value = '';
+  form.savePassword.checked = host?.savePassword ?? true;
+  form.auth.value = host?.auth || 'key';
+  form.auth.onchange = () => toggleAuthFields(form.auth.value);
+  toggleAuthFields(form.auth.value);
+
   call(window.api.settings.getDefaults).then((d) => {
     form.port.value = host?.port || d.port || 22;
     form.username.value = host?.username || d.username || '';
     form.defaultProfile.value = host?.defaultProfile || d.profile || 'default';
     form.hermesHome.value = host?.hermesHome || d.hermesHome || '';
     form.privateKeyPath.value = host?.privateKeyPath || d.privateKeyPath || '';
+    if (!host) {
+      form.auth.value = d.auth || 'key';
+      toggleAuthFields(form.auth.value);
+    }
   }).catch(() => {});
+
+  describeKeychain(host);
   $('#host-modal').hidden = false;
   form.hostname.focus();
+}
+
+function toggleAuthFields(mode) {
+  $('#auth-key').hidden = mode !== 'key';
+  $('#auth-password').hidden = mode !== 'password';
+}
+
+/** Say plainly where a password would go, and whether one is already stored. */
+async function describeKeychain(host) {
+  const note = $('#keychain-note');
+  note.textContent = 'Checking OS keychain…';
+  note.style.color = 'var(--muted)';
+  try {
+    const available = await call(window.api.creds.available);
+    if (!available) {
+      note.style.color = 'var(--warn)';
+      note.textContent = 'No OS keychain available here — the password cannot be saved, so you will be asked for it on every connect.';
+      $('#host-form').savePassword.checked = false;
+      $('#host-form').savePassword.disabled = true;
+      return;
+    }
+    $('#host-form').savePassword.disabled = false;
+    const stored = host ? await call(window.api.creds.has, host.id) : false;
+    note.textContent = stored
+      ? 'A password is already saved for this host. Leave the field blank to keep it.'
+      : 'Encrypted by your OS keychain, never written to config.json. Leave unchecked to be asked on every connect.';
+  } catch (err) {
+    note.textContent = err.message;
+  }
 }
 
 function closeHostModal() { $('#host-modal').hidden = true; }
@@ -775,8 +835,20 @@ async function onHostSubmit(e) {
   const payload = Object.fromEntries(new FormData(form).entries());
   payload.id = payload.hostId || undefined;
   delete payload.hostId;
+
+  // The password is never part of the host record — pull it out before saving.
+  const password = payload.password || '';
+  delete payload.password;
+  payload.savePassword = form.savePassword.checked;
+
   try {
     const saved = await call(window.api.hosts.save, payload);
+    if (saved.auth === 'password') {
+      if (saved.savePassword && password) await call(window.api.creds.set, saved.id, password);
+      else if (!saved.savePassword) await call(window.api.creds.remove, saved.id);
+    } else {
+      await call(window.api.creds.remove, saved.id);
+    }
     state.hosts = await call(window.api.hosts.list);
     closeHostModal();
     renderSidebar();
@@ -1225,7 +1297,23 @@ async function renderSettings() {
   defs.append(el('div', { className: 'row' },
     el('div', { className: 'grow' }, addField('username', 'SSH username', defaults.username, 'your-ssh-user')),
     el('div', { className: 'w-90' }, addField('port', 'Port', defaults.port, '22'))));
+  const authSel = el('select', {});
+  for (const [v, label] of [['key', 'SSH key'], ['password', 'Password']]) {
+    authSel.append(el('option', { value: v, textContent: label }));
+  }
+  authSel.value = defaults.auth === 'password' ? 'password' : 'key';
+  defs.append(el('label', { className: 'field' }, el('span', {}, 'Default authentication'), authSel));
+
   defs.append(addField('privateKeyPath', 'Private key path', defaults.privateKeyPath, '~/.ssh/id_ed25519'));
+
+  const keychain = el('p', { className: 'hint', style: 'margin:-4px 0 12px' });
+  call(window.api.creds.available).then((ok) => {
+    keychain.style.color = ok ? 'var(--muted)' : 'var(--warn)';
+    keychain.textContent = ok
+      ? 'Passwords are encrypted by your OS keychain and stored outside config.json.'
+      : 'No OS keychain on this system — password hosts will prompt on every connect.';
+  }).catch(() => {});
+  defs.append(keychain);
   defs.append(el('div', { className: 'row' },
     el('div', { className: 'grow' }, addField('profile', 'Default Hermes profile', defaults.profile, 'default')),
     el('div', { className: 'grow' }, addField('hermesHome', 'Hermes home override', defaults.hermesHome, '$HERMES_HOME or ~/.hermes'))));
@@ -1237,6 +1325,7 @@ async function renderSettings() {
       await call(window.api.settings.setDefaults, {
         username: fields.username.value.trim(),
         port: Number(fields.port.value) || 22,
+        auth: authSel.value,
         privateKeyPath: fields.privateKeyPath.value.trim(),
         profile: fields.profile.value.trim() || 'default',
         hermesHome: fields.hermesHome.value.trim()

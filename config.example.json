@@ -4,22 +4,21 @@
     "to point somewhere else. The app writes this file too, so anything you add",
     "by hand shows up in the UI and vice versa.",
     "",
-    "This file stores the PATH to your private key, never the key itself.",
-    "Even so, it names your servers -- keep it out of public repos."
+    "This file NEVER contains passwords or key material. Key hosts store the PATH",
+    "to a private key; password hosts store only whether a password was saved to",
+    "your OS keychain. It does name your servers -- keep it out of public repos."
   ],
-
   "defaults": {
     "username": "your-ssh-user",
     "privateKeyPath": "~/.ssh/id_ed25519",
     "port": 22,
     "profile": "default",
-    "hermesHome": ""
+    "hermesHome": "",
+    "auth": "key"
   },
-
   "ui": {
     "motion": "always"
   },
-
   "hosts": [
     {
       "id": "prod-1",
@@ -29,7 +28,8 @@
       "username": "your-ssh-user",
       "privateKeyPath": "~/.ssh/id_ed25519",
       "hermesHome": "",
-      "defaultProfile": "default"
+      "defaultProfile": "default",
+      "auth": "key"
     },
     {
       "id": "dev-1",
@@ -39,7 +39,20 @@
       "username": "ubuntu",
       "privateKeyPath": "~/.ssh/id_dev",
       "hermesHome": "/opt/hermes",
-      "defaultProfile": "staging"
+      "defaultProfile": "staging",
+      "auth": "key"
+    },
+    {
+      "id": "local-1",
+      "label": "Local VPS",
+      "hostname": "192.168.1.50",
+      "port": 22,
+      "username": "ubuntu",
+      "auth": "password",
+      "savePassword": true,
+      "privateKeyPath": "",
+      "hermesHome": "",
+      "defaultProfile": "default"
     }
   ]
 }
