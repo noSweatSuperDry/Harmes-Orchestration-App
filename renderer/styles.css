@@ -145,13 +145,22 @@ table.kv th {
   color: var(--muted); font-weight: 500; padding: 0 8px 6px 0;
 }
 table.kv td { padding: 3px 8px 3px 0; vertical-align: middle; }
-table.kv td:last-child, table.kv th:last-child { padding-right: 0; width: 1%; white-space: nowrap; }
+/* Only the API-keys table has a trailing button column to squeeze. */
+table.kv.actions td:last-child, table.kv.actions th:last-child { padding-right: 0; width: 1%; white-space: nowrap; }
 table.kv input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 table.kv tr.deleted input { opacity: .35; text-decoration: line-through; }
+/* config value editors: wrap long values, grow with content, drag to resize */
+table.kv.cfg { table-layout: fixed; }
+table.kv.cfg td { vertical-align: top; padding-top: 5px; }
+table.kv.cfg td.k { width: 34%; word-break: break-word; white-space: normal; padding-top: 12px; }
+textarea.cfg-val {
+  width: 100%; min-height: 32px; max-height: 260px; resize: vertical;
+  white-space: pre-wrap; word-break: break-word; overflow-y: auto; line-height: 1.5;
+}
 .readonly-val {
   font: 12px ui-monospace, Menlo, monospace; color: var(--muted);
   background: var(--bg-3); border: 1px dashed var(--line); border-radius: 6px;
-  padding: 7px 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 7px 9px; white-space: pre-wrap; word-break: break-all; max-height: 140px; overflow-y: auto;
 }
 
 .badge {
@@ -306,3 +315,14 @@ table.data tr:hover td { background: rgba(255,255,255,.02); }
 .host-item .agent { margin-left: auto; }
 .host-item:hover .agent { display: none; }
 .host-item .edit { margin-left: auto; }
+
+.modal.wide { width: 620px; max-height: 82vh; overflow-y: auto; }
+.settings-section { border-top: 1px solid var(--line); padding-top: 16px; margin-top: 16px; }
+.settings-section:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+.settings-section h3 { margin: 0 0 4px; font-size: 13px; }
+.settings-section .hint { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+.path-box {
+  font: 12px ui-monospace, Menlo, monospace; background: var(--bg-3); border: 1px solid var(--line);
+  border-radius: 6px; padding: 8px 10px; word-break: break-all; margin-bottom: 10px;
+}
+.sidebar-foot button { width: 100%; }

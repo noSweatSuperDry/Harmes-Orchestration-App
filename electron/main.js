@@ -78,6 +78,16 @@ handle('hosts:list', () => store.listHosts());
 handle('hosts:save', (input) => store.saveHost(input));
 handle('hosts:delete', (id) => { ssh.disconnect(id); hermes.forgetHome(id); store.deleteHost(id); return true; });
 handle('hosts:defaultKey', () => store.defaultKeyPath());
+handle('hosts:importSshConfig', () => store.importSshConfig());
+handle('defaults:get', () => store.getDefaults());
+handle('defaults:set', (patch) => store.setDefaults(patch));
+handle('config:info', () => store.configInfo());
+handle('config:reload', () => store.reload());
+handle('config:reveal', () => {
+  const { path: p } = store.configInfo();
+  shell.showItemInFolder(p);
+  return true;
+});
 handle('ui:get', () => store.getUi());
 handle('ui:set', (patch) => store.setUi(patch));
 

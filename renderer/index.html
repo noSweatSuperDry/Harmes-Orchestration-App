@@ -92,7 +92,7 @@
         </div>
         <div class="row">
           <label class="field grow"><span>SSH user</span>
-            <input name="username" value="zahid" autocomplete="off" /></label>
+            <input name="username" autocomplete="off" /></label>
           <label class="field grow"><span>Default profile</span>
             <input name="defaultProfile" value="default" autocomplete="off" /></label>
         </div>
@@ -107,6 +107,17 @@
           <button type="submit" class="btn">Save</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="modal-backdrop" id="settings-modal" hidden>
+    <div class="modal wide">
+      <div class="card-head" style="margin-bottom:16px">
+        <h2 style="margin:0">Settings</h2>
+        <button type="button" class="icon-btn" id="settings-close" title="Close">✕</button>
+      </div>
+      <div id="settings-body"></div>
     </div>
   </div>
 

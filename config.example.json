@@ -1,0 +1,45 @@
+{
+  "_comment": [
+    "Copy to ~/.hermes-orchestrator/config.json, or set HERMES_ORCHESTRATOR_CONFIG",
+    "to point somewhere else. The app writes this file too, so anything you add",
+    "by hand shows up in the UI and vice versa.",
+    "",
+    "This file stores the PATH to your private key, never the key itself.",
+    "Even so, it names your servers -- keep it out of public repos."
+  ],
+
+  "defaults": {
+    "username": "your-ssh-user",
+    "privateKeyPath": "~/.ssh/id_ed25519",
+    "port": 22,
+    "profile": "default",
+    "hermesHome": ""
+  },
+
+  "ui": {
+    "motion": "always"
+  },
+
+  "hosts": [
+    {
+      "id": "prod-1",
+      "label": "Production",
+      "hostname": "prod.example.com",
+      "port": 22,
+      "username": "your-ssh-user",
+      "privateKeyPath": "~/.ssh/id_ed25519",
+      "hermesHome": "",
+      "defaultProfile": "default"
+    },
+    {
+      "id": "dev-1",
+      "label": "Dev box",
+      "hostname": "10.0.0.42",
+      "port": 2222,
+      "username": "ubuntu",
+      "privateKeyPath": "~/.ssh/id_dev",
+      "hermesHome": "/opt/hermes",
+      "defaultProfile": "staging"
+    }
+  ]
+}

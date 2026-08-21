@@ -1,14 +1,74 @@
 # Hermes Orchestrator
 
-Desktop control panel for the [Hermes](https://example.invalid) AI harness running on several VPS hosts.
-Click a host, see and edit its Hermes profile, and drop into a live shell — no `ssh` + `vim` round trip.
+Desktop control panel for the Hermes AI harness running across several VPS hosts.
+Click a host, see and edit its Hermes profile, watch what the agent is doing, and drop into a live
+shell — no `ssh` + `vim` round trip.
 
-## Run
+Built with Electron and `ssh2`. Everything happens over your existing SSH key; there is no server,
+no telemetry, and no account.
+
+## Quick start
 
 ```bash
+git clone <your-fork-url> && cd hermes-orchestrator
 npm install
 npm start
 ```
+
+On first launch, open **Settings** (bottom of the sidebar) and set your SSH username and key path,
+then add a host — or hit **Scan and import** to pull every machine out of your `~/.ssh/config`.
+
+## Configuration
+
+Hosts and defaults live in a plain JSON file you can read, edit, back up, and copy between machines:
+
+```
+~/.hermes-orchestrator/config.json
+```
+
+Point it elsewhere with `HERMES_ORCHESTRATOR_CONFIG=/path/to/config.json`. See
+[`config.example.json`](config.example.json) for the full shape:
+
+```jsonc
+{
+  "defaults": {
+    "username": "your-ssh-user",
+    "privateKeyPath": "~/.ssh/id_ed25519",
+    "port": 22,
+    "profile": "default",
+    "hermesHome": ""
+  },
+  "ui": { "motion": "always" },
+  "hosts": [
+    {
+      "id": "prod-1",
+      "label": "Production",
+      "hostname": "prod.example.com",
+      "port": 22,
+      "username": "your-ssh-user",
+      "privateKeyPath": "~/.ssh/id_ed25519",
+      "hermesHome": "",
+      "defaultProfile": "default"
+    }
+  ]
+}
+```
+
+Edit it by hand or through **Settings** — the two stay in sync, and **Reload from disk** picks up
+external edits without restarting. `~` is expanded in key paths. The file is written `0600` inside
+a `0700` directory.
+
+> **It stores the *path* to your private key, never the key itself.** It does still name your
+> servers, so keep it out of public repos — the shipped `.gitignore` already excludes `config.json`.
+
+### Settings
+
+| Section | What it does |
+| --- | --- |
+| **Connection defaults** | Username, port, key path, Hermes profile and home — pre-filled for every new host |
+| **Appearance** | Agent animation: `Always on` / `Follow system` / `Off` |
+| **Config file** | Shows the path, reveals it in your file manager, reloads it from disk |
+| **Import** | Adds a host per `Host` entry in `~/.ssh/config`, skipping wildcards and duplicates |
 
 ## What it does
 
@@ -41,9 +101,9 @@ output:
 Terminal output wins over the CPU poll: if bytes are arriving, the agent is demonstrably busy and
 flips to **Working** within a frame rather than waiting up to 4s for the next poll.
 
-Animation respects `prefers-reduced-motion`, but the sidebar has an **Animation** control
-(`Always on` / `Follow system` / `Off`). It defaults to **Always on** — note that this overrides
-macOS System Settings → Accessibility → Display → **Reduce motion** if you have it enabled.
+Animation is controlled in **Settings → Appearance** (`Always on` / `Follow system` / `Off`). It
+defaults to **Always on** — note that this overrides your OS "Reduce motion" accessibility setting
+(macOS: System Settings → Accessibility → Display). Choose **Follow system** to respect it.
 
 ### Telemetry
 
@@ -133,3 +193,12 @@ users, and key *paths* — no secrets.
   confirmed. Once you tell me the flag (or env var), both hook up in one edit.
 - `auth.json` is read-only — it lists credential names and expiry, never token values.
 - Host-key verification is currently accept-on-connect.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for layout, ground rules, and the list of things most worth
+doing — host-key verification being the big one.
+
+## License
+
+[MIT](LICENSE)

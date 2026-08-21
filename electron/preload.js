@@ -14,7 +14,15 @@ contextBridge.exposeInMainWorld('api', {
     list: () => invoke('hosts:list'),
     save: (host) => invoke('hosts:save', host),
     remove: (id) => invoke('hosts:delete', id),
-    defaultKey: () => invoke('hosts:defaultKey')
+    defaultKey: () => invoke('hosts:defaultKey'),
+    importSshConfig: () => invoke('hosts:importSshConfig')
+  },
+  settings: {
+    getDefaults: () => invoke('defaults:get'),
+    setDefaults: (patch) => invoke('defaults:set', patch),
+    configInfo: () => invoke('config:info'),
+    reload: () => invoke('config:reload'),
+    reveal: () => invoke('config:reveal')
   },
   ui: {
     get: () => invoke('ui:get'),

@@ -86,9 +86,10 @@ function wireChrome() {
   $('#host-form').onsubmit = onHostSubmit;
   $('#host-delete').onclick = onHostDelete;
   $('#pass-cancel').onclick = () => { $('#pass-modal').hidden = true; };
+  $('#settings-close').onclick = closeSettings;
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closeHostModal(); $('#pass-modal').hidden = true; }
+    if (e.key === 'Escape') { closeHostModal(); closeSettings(); $('#pass-modal').hidden = true; }
   });
 
   window.addEventListener('resize', () => fitActiveTerminal());
@@ -415,8 +416,8 @@ function renderModel() {
   if (rest.length) {
     const other = el('div', { className: 'card' },
       el('h3', {}, 'All other settings ', el('span', { className: 'muted' }, `· ${rest.length} keys`)));
-    const table = el('table', { className: 'kv' });
-    table.append(el('tr', {}, el('th', {}, 'Key'), el('th', {}, 'Value')));
+    const table = el('table', { className: 'kv cfg' });
+    table.append(el('tr', {}, el('th', { className: 'k' }, 'Key'), el('th', {}, 'Value')));
     for (const key of rest) table.append(configRow(key, flat[key], pending));
     other.append(table);
     pane.append(other);
@@ -425,7 +426,7 @@ function renderModel() {
   const extraKeys = Object.keys(flat).filter((k) => k.startsWith('model.') && !['model.default', 'model.provider'].includes(k));
   if (extraKeys.length) {
     const more = el('div', { className: 'card' }, el('h3', {}, 'Other model settings'));
-    const table = el('table', { className: 'kv' });
+    const table = el('table', { className: 'kv cfg' });
     for (const key of extraKeys.sort()) table.append(configRow(key, flat[key], pending));
     more.append(table);
     pane.append(more);
@@ -448,6 +449,7 @@ function renderModel() {
     el('span', { className: 'muted sm', style: 'align-self:center' },
       'Comments and formatting in config.yaml are preserved.')));
   pane.oninput = () => { save.disabled = Object.keys(pending).length === 0; };
+  growAll(pane);
 }
 
 function fieldFor(key, value, pending) {
@@ -460,13 +462,28 @@ function configRow(key, value, pending) {
   const isScalar = value === null || ['string', 'number', 'boolean'].includes(typeof value);
   const cell = el('td');
   if (isScalar) {
-    const input = el('input', { value: value == null ? '' : String(value) });
-    input.oninput = () => { pending[key] = input.value; };
-    cell.append(input);
+    const ta = el('textarea', {
+      className: 'cfg-val', rows: 1, spellcheck: false,
+      value: value == null ? '' : String(value)
+    });
+    ta.oninput = () => { pending[key] = ta.value; autoGrow(ta); };
+    cell.append(ta);
   } else {
     cell.append(el('div', { className: 'readonly-val', title: JSON.stringify(value) }, JSON.stringify(value)));
   }
-  return el('tr', {}, el('td', { className: 'muted', style: 'width:38%' }, key), cell);
+  return el('tr', {}, el('td', { className: 'muted k' }, key), cell);
+}
+
+/** Height follows content, but the user can still drag to resize. */
+function autoGrow(ta) {
+  ta.style.height = 'auto';
+  ta.style.height = `${Math.min(260, Math.max(32, ta.scrollHeight + 2))}px`;
+}
+
+function growAll(root) {
+  requestAnimationFrame(() => {
+    for (const ta of root.querySelectorAll('textarea.cfg-val')) autoGrow(ta);
+  });
 }
 
 function flatten(obj, prefix = '', out = {}) {
@@ -492,7 +509,7 @@ function renderKeys() {
     el('h3', {}, '.env ', el('span', { className: 'muted' }, `· ${d?.dir || ''}/.env`)),
     el('span', { className: 'badge' }, 'chmod 600')));
 
-  const table = el('table', { className: 'kv' });
+  const table = el('table', { className: 'kv actions' });
   table.append(el('tr', {}, el('th', {}, 'Name'), el('th', {}, 'Value'), el('th', {})));
   const body = el('tbody');
   table.append(body);
@@ -739,13 +756,13 @@ function openHostModal(host) {
   form.hostId.value = host?.id || '';
   form.label.value = host?.label || '';
   form.hostname.value = host?.hostname || '';
-  form.port.value = host?.port || 22;
-  form.username.value = host?.username || 'zahid';
-  form.defaultProfile.value = host?.defaultProfile || 'default';
-  form.hermesHome.value = host?.hermesHome || '';
-  window.api.hosts.defaultKey().then((res) => {
-    form.privateKeyPath.value = host?.privateKeyPath || (res.ok ? res.data : '');
-  });
+  call(window.api.settings.getDefaults).then((d) => {
+    form.port.value = host?.port || d.port || 22;
+    form.username.value = host?.username || d.username || '';
+    form.defaultProfile.value = host?.defaultProfile || d.profile || 'default';
+    form.hermesHome.value = host?.hermesHome || d.hermesHome || '';
+    form.privateKeyPath.value = host?.privateKeyPath || d.privateKeyPath || '';
+  }).catch(() => {});
   $('#host-modal').hidden = false;
   form.hostname.focus();
 }
@@ -819,21 +836,9 @@ function renderMotionControl() {
   const foot = $('#sidebar-foot');
   if (!foot) return;
   foot.textContent = '';
-  const sel = el('select', { style: 'width:auto;padding:2px 4px;font-size:11px' });
-  for (const [v, label] of [['always', 'Always on'], ['system', 'Follow system'], ['off', 'Off']]) {
-    sel.append(el('option', { value: v, textContent: label }));
-  }
-  sel.value = state.motion;
-  sel.onchange = () => setMotion(sel.value);
-
-  const suppressed = state.motion === 'system' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-  foot.append(
-    el('div', { className: 'field-inline' }, el('span', {}, 'Animation'), sel),
-    suppressed
-      ? el('div', { className: 'sm', style: 'margin-top:5px;color:var(--warn)' },
-          'Suppressed by macOS Reduce Motion')
-      : ''
-  );
+  const btn = el('button', { className: 'btn ghost sm', textContent: '⚙  Settings' });
+  btn.onclick = openSettings;
+  foot.append(btn);
 }
 
 /* ============================ agent activity ============================== */
@@ -1180,4 +1185,154 @@ function renderSupabaseCard(sb) {
       `No Supabase containers, CLI or responding ports found. ${probed.length} of ${sb.ports.length} probed ports answered.`));
   }
   return c;
+}
+
+/* =============================== settings ================================ */
+
+function closeSettings() { $('#settings-modal').hidden = true; }
+
+async function openSettings() {
+  $('#settings-modal').hidden = false;
+  await renderSettings();
+}
+
+async function renderSettings() {
+  const body = $('#settings-body');
+  body.textContent = '';
+
+  let defaults = {};
+  let info = { path: '', exists: false };
+  try {
+    defaults = await call(window.api.settings.getDefaults);
+    info = await call(window.api.settings.configInfo);
+  } catch (err) {
+    body.append(el('p', { className: 'muted' }, `Could not read settings: ${err.message}`));
+    return;
+  }
+
+  /* --- connection defaults --- */
+  const defs = el('div', { className: 'settings-section' },
+    el('h3', {}, 'Connection defaults'),
+    el('p', { className: 'hint' }, 'Pre-filled whenever you add a host. Existing hosts keep their own values.'));
+
+  const fields = {};
+  const addField = (name, label, value, placeholder) => {
+    const input = el('input', { value: value ?? '', placeholder: placeholder || '', autocomplete: 'off' });
+    fields[name] = input;
+    return el('label', { className: 'field' }, el('span', {}, label), input);
+  };
+
+  defs.append(el('div', { className: 'row' },
+    el('div', { className: 'grow' }, addField('username', 'SSH username', defaults.username, 'your-ssh-user')),
+    el('div', { className: 'w-90' }, addField('port', 'Port', defaults.port, '22'))));
+  defs.append(addField('privateKeyPath', 'Private key path', defaults.privateKeyPath, '~/.ssh/id_ed25519'));
+  defs.append(el('div', { className: 'row' },
+    el('div', { className: 'grow' }, addField('profile', 'Default Hermes profile', defaults.profile, 'default')),
+    el('div', { className: 'grow' }, addField('hermesHome', 'Hermes home override', defaults.hermesHome, '$HERMES_HOME or ~/.hermes'))));
+
+  const saveDefaults = el('button', { className: 'btn', textContent: 'Save defaults' });
+  saveDefaults.onclick = async () => {
+    saveDefaults.disabled = true;
+    try {
+      await call(window.api.settings.setDefaults, {
+        username: fields.username.value.trim(),
+        port: Number(fields.port.value) || 22,
+        privateKeyPath: fields.privateKeyPath.value.trim(),
+        profile: fields.profile.value.trim() || 'default',
+        hermesHome: fields.hermesHome.value.trim()
+      });
+      toast('Defaults saved', 'ok');
+    } catch (err) {
+      toast(err.message, 'err');
+    } finally {
+      saveDefaults.disabled = false;
+    }
+  };
+  defs.append(saveDefaults);
+  body.append(defs);
+
+  /* --- appearance --- */
+  const appearance = el('div', { className: 'settings-section' },
+    el('h3', {}, 'Appearance'),
+    el('p', { className: 'hint' }, 'Agent activity animations — sleeping, thinking, working.'));
+
+  const sel = el('select', { style: 'width:auto' });
+  for (const [v, label] of [['always', 'Always on'], ['system', 'Follow system setting'], ['off', 'Off']]) {
+    sel.append(el('option', { value: v, textContent: label }));
+  }
+  sel.value = state.motion;
+
+  const note = el('div', { className: 'sm', style: 'margin-top:8px' });
+  const refreshNote = () => {
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    note.textContent = '';
+    note.style.color = 'var(--muted)';
+    if (state.motion === 'system' && reduced) {
+      note.style.color = 'var(--warn)';
+      note.textContent = 'Your OS has "Reduce motion" enabled, so animations are currently off.';
+    } else if (state.motion === 'always' && reduced) {
+      note.textContent = 'This overrides your OS "Reduce motion" setting.';
+    }
+  };
+  sel.onchange = () => { setMotion(sel.value); refreshNote(); };
+  refreshNote();
+
+  appearance.append(el('label', { className: 'field-inline' }, el('span', {}, 'Animation'), sel), note);
+  body.append(appearance);
+
+  /* --- config file --- */
+  const cfg = el('div', { className: 'settings-section' },
+    el('h3', {}, 'Config file'),
+    el('p', { className: 'hint' },
+      'Hosts and defaults live here as plain JSON. Edit it by hand, copy it to another machine, or keep it in a private repo. It holds key paths, never key material.'),
+    el('div', { className: 'path-box' }, info.path || 'unknown'));
+
+  const reveal = el('button', { className: 'btn ghost sm', textContent: 'Reveal in Finder' });
+  reveal.onclick = () => call(window.api.settings.reveal).catch((e) => toast(e.message, 'err'));
+
+  const reload = el('button', { className: 'btn ghost sm', textContent: 'Reload from disk' });
+  reload.onclick = async () => {
+    try {
+      const fresh = await call(window.api.settings.reload);
+      state.hosts = fresh.hosts;
+      state.motion = fresh.ui.motion || 'always';
+      applyMotion();
+      renderSidebar();
+      renderShellState();
+      await renderSettings();
+      toast(`Reloaded — ${fresh.hosts.length} host(s)`, 'ok');
+    } catch (err) {
+      toast(err.message, 'err');
+    }
+  };
+  cfg.append(el('div', { className: 'row' }, reveal, reload));
+  body.append(cfg);
+
+  /* --- import --- */
+  const imp = el('div', { className: 'settings-section' },
+    el('h3', {}, 'Import from ~/.ssh/config'),
+    el('p', { className: 'hint' },
+      'Adds a host for each Host entry that names a real machine. Wildcard patterns such as "Host *" are skipped, and hosts you already have are left alone.'));
+
+  const result = el('div', { className: 'sm muted', style: 'margin-top:10px' });
+  const importBtn = el('button', { className: 'btn ghost sm', textContent: 'Scan and import' });
+  importBtn.onclick = async () => {
+    importBtn.disabled = true;
+    try {
+      const r = await call(window.api.hosts.importSshConfig);
+      state.hosts = await call(window.api.hosts.list);
+      renderSidebar();
+      renderShellState();
+      result.textContent = r.error
+        ? `Nothing imported — ${r.error}`
+        : `Found ${r.found}, added ${r.added}, already present ${r.skipped}.`;
+      if (r.added) toast(`Imported ${r.added} host(s)`, 'ok');
+    } catch (err) {
+      result.textContent = err.message;
+    } finally {
+      importBtn.disabled = false;
+    }
+  };
+  imp.append(importBtn, result);
+  body.append(imp);
 }

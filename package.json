@@ -1,7 +1,7 @@
 {
   "name": "hermes-orchestrator",
   "version": "0.1.0",
-  "description": "Desktop control panel for Hermes AI harness across multiple VPS hosts",
+  "description": "Desktop control panel for the Hermes AI harness across multiple VPS hosts \u2014 model, API keys, memory, live shell and server telemetry over SSH.",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
@@ -87,5 +87,23 @@
       "allowToChangeInstallationDirectory": true,
       "shortcutName": "Hermes Orchestrator"
     }
-  }
+  },
+  "keywords": [
+    "electron",
+    "ssh",
+    "hermes",
+    "ai-agent",
+    "devtools",
+    "vps",
+    "telemetry",
+    "dashboard"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/noSweatSuperDry/Harmes-Orchestration-App.git"
+  },
+  "bugs": {
+    "url": "https://github.com/noSweatSuperDry/Harmes-Orchestration-App/issues"
+  },
+  "homepage": "https://github.com/noSweatSuperDry/Harmes-Orchestration-App#readme"
 }
