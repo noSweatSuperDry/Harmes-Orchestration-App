@@ -1397,31 +1397,91 @@ async function renderSettings() {
   cfg.append(el('div', { className: 'row' }, reveal, reload));
   body.append(cfg);
 
-  /* --- import --- */
+  /* --- discovery --- */
   const imp = el('div', { className: 'settings-section' },
-    el('h3', {}, 'Import from ~/.ssh/config'),
+    el('h3', {}, 'Discover hosts'),
     el('p', { className: 'hint' },
-      'Adds a host for each Host entry that names a real machine. Wildcard patterns such as "Host *" are skipped, and hosts you already have are left alone.'));
+      'Scans ~/.ssh/config, ~/.ssh/known_hosts and your shell history for machines you have already reached over SSH. Read-only, and nothing leaves this computer — only hostname, username and port are read.'));
 
-  const result = el('div', { className: 'sm muted', style: 'margin-top:10px' });
-  const importBtn = el('button', { className: 'btn ghost sm', textContent: 'Scan and import' });
-  importBtn.onclick = async () => {
-    importBtn.disabled = true;
+  const result = el('div', { className: 'sm muted', style: 'margin:10px 0' });
+  const list = el('div', {});
+  const actions = el('div', { className: 'row', style: 'margin-top:10px' });
+
+  const scanBtn = el('button', { className: 'btn ghost sm', textContent: 'Scan this computer' });
+  scanBtn.onclick = async () => {
+    scanBtn.disabled = true;
+    scanBtn.textContent = 'Scanning…';
+    list.textContent = '';
+    actions.textContent = '';
     try {
-      const r = await call(window.api.hosts.importSshConfig);
-      state.hosts = await call(window.api.hosts.list);
-      renderSidebar();
-      renderShellState();
-      result.textContent = r.error
-        ? `Nothing imported — ${r.error}`
-        : `Found ${r.found}, added ${r.added}, already present ${r.skipped}.`;
-      if (r.added) toast(`Imported ${r.added} host(s)`, 'ok');
+      const r = await call(window.api.hosts.discover);
+      renderDiscovered(r, list, actions, result);
     } catch (err) {
       result.textContent = err.message;
     } finally {
-      importBtn.disabled = false;
+      scanBtn.disabled = false;
+      scanBtn.textContent = 'Rescan';
     }
   };
-  imp.append(importBtn, result);
+
+  imp.append(scanBtn, result, list, actions);
   body.append(imp);
+}
+
+function renderDiscovered(r, list, actions, result) {
+  const fresh = r.candidates.filter((c) => !c.existing);
+  const scanned = r.stats.sources.map((s) => s.file.replace(/^.*\/(\.[^/]+|[^/]+)$/, '$1')).join(', ');
+  result.textContent = `Found ${r.candidates.length} host(s) across ${r.stats.sources.length} source(s): ${scanned}. `
+    + `${fresh.length} new, ${r.candidates.length - fresh.length} already configured.`
+    + (r.stats.hashedSkipped ? ` ${r.stats.hashedSkipped} known_hosts entries are hashed and cannot be read.` : '');
+
+  if (!r.candidates.length) return;
+
+  const boxes = [];
+  const table = el('table', { className: 'data' });
+  table.append(el('tr', {},
+    el('th', {}, ''), el('th', {}, 'Host'), el('th', {}, 'User'),
+    el('th', {}, 'Port'), el('th', {}, 'Seen'), el('th', {}, 'Source')));
+
+  for (const c of r.candidates) {
+    const cb = el('input', { type: 'checkbox', style: 'width:auto', checked: !c.existing, disabled: c.existing });
+    boxes.push({ cb, c });
+    table.append(el('tr', {},
+      el('td', {}, cb),
+      el('td', { className: 'mono' }, c.hostname, c.existing ? el('span', { className: 'muted' }, '  (added)') : ''),
+      el('td', {}, c.username || '—'),
+      el('td', {}, c.port),
+      el('td', {}, `${c.count}×`),
+      el('td', { className: 'muted' }, c.sources.join(', '))));
+  }
+  list.append(el('div', { className: 'scroll-y', style: 'margin-top:6px' }, table));
+
+  const addBtn = el('button', { className: 'btn', textContent: 'Add selected' });
+  addBtn.onclick = async () => {
+    const picks = boxes.filter((b) => b.cb.checked && !b.c.existing).map((b) => b.c);
+    if (!picks.length) return;
+    addBtn.disabled = true;
+    try {
+      const res = await call(window.api.hosts.addDiscovered, picks);
+      state.hosts = await call(window.api.hosts.list);
+      renderSidebar();
+      renderShellState();
+      toast(`Added ${res.added} host(s)`, 'ok');
+      const again = await call(window.api.hosts.discover);
+      list.textContent = '';
+      actions.textContent = '';
+      renderDiscovered(again, list, actions, result);
+    } catch (err) {
+      toast(err.message, 'err');
+    } finally {
+      addBtn.disabled = false;
+    }
+  };
+
+  const none = el('button', { className: 'btn ghost sm', textContent: 'Select none' });
+  none.onclick = () => { for (const b of boxes) if (!b.c.existing) b.cb.checked = false; };
+  const all = el('button', { className: 'btn ghost sm', textContent: 'Select all new' });
+  all.onclick = () => { for (const b of boxes) if (!b.c.existing) b.cb.checked = true; };
+
+  actions.append(addBtn, el('span', { className: 'grow' }), all, none);
 }

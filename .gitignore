@@ -6,3 +6,6 @@ release/
 # never commit a real config -- it names your servers
 config.json
 .hermes-orchestrator/
+
+# macOS
+.DS_Store

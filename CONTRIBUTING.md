@@ -24,6 +24,7 @@ electron/
   telemetry.js    The remote probe script and its parsers
   store.js        config.json, defaults, ~/.ssh/config import
   credentials.js  Passwords, encrypted via OS keychain (safeStorage)
+  discover.js     Finds previously-used SSH hosts from local files
 renderer/
   index.html      Static shell — panes and modals
   app.js          All rendering and state

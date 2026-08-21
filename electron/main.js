@@ -6,6 +6,7 @@ const ssh = require('./ssh-manager');
 const hermes = require('./hermes');
 const telemetry = require('./telemetry');
 const credentials = require('./credentials');
+const discover = require('./discover');
 
 let win = null;
 
@@ -91,6 +92,21 @@ handle('hosts:delete', (id) => {
 });
 handle('hosts:defaultKey', () => store.defaultKeyPath());
 handle('hosts:importSshConfig', () => store.importSshConfig());
+handle('hosts:discover', () => discover.scan(store.listHosts(), store.getDefaults()));
+handle('hosts:addDiscovered', (picks) => {
+  const added = [];
+  for (const c of picks || []) {
+    added.push(store.saveHost({
+      label: c.label || c.hostname,
+      hostname: c.hostname,
+      port: c.port,
+      username: c.username,
+      auth: 'key',
+      privateKeyPath: c.privateKeyPath || ''
+    }));
+  }
+  return { added: added.length };
+});
 handle('defaults:get', () => store.getDefaults());
 handle('defaults:set', (patch) => store.setDefaults(patch));
 handle('config:info', () => store.configInfo());

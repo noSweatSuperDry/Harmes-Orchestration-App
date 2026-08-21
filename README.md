@@ -16,7 +16,26 @@ npm start
 ```
 
 On first launch, open **Settings** (bottom of the sidebar) and set your SSH username and key path,
-then add a host — or hit **Scan and import** to pull every machine out of your `~/.ssh/config`.
+then add a host — or hit **Scan this computer** and let it find the machines you already SSH into.
+
+## Discovering hosts you already use
+
+**Settings → Discover hosts** reads four local sources and offers you a checklist:
+
+| Source | What it contributes |
+| --- | --- |
+| `~/.ssh/config` | Aliases, explicit users, per-host `IdentityFile` |
+| `~/.ssh/known_hosts` (and `.old`) | Every host you have ever accepted a key from |
+| Shell history (`.zsh_history`, `.bash_history`, fish) | The username you actually connect as, and non-default ports |
+
+Results are merged and ranked by how often you use them, hosts already configured are shown greyed
+out and unselectable, and the same machine reached as two different users appears as two rows. It
+recognises `ssh`, `sftp`, `scp`, `rsync` and `ssh-copy-id`, understands `-p`/`-i`/`-o`, and ignores
+`ssh-keygen` and `ssh-add`.
+
+The scan is read-only and stays on your machine — only hostname, username and port are extracted,
+never the rest of a history line. `known_hosts` entries written with `HashKnownHosts yes` are HMACs
+and cannot be reversed; the summary tells you how many were skipped for that reason.
 
 ## Authentication
 
@@ -89,7 +108,7 @@ a `0700` directory.
 | **Connection defaults** | Username, port, auth method, key path, Hermes profile and home — pre-filled for every new host |
 | **Appearance** | Agent animation: `Always on` / `Follow system` / `Off` |
 | **Config file** | Shows the path, reveals it in your file manager, reloads it from disk |
-| **Import** | Adds a host per `Host` entry in `~/.ssh/config`, skipping wildcards and duplicates |
+| **Discover hosts** | Finds machines you have already reached over SSH from this computer, and lets you pick which to add |
 
 ## What it does
 

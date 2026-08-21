@@ -15,7 +15,9 @@ contextBridge.exposeInMainWorld('api', {
     save: (host) => invoke('hosts:save', host),
     remove: (id) => invoke('hosts:delete', id),
     defaultKey: () => invoke('hosts:defaultKey'),
-    importSshConfig: () => invoke('hosts:importSshConfig')
+    importSshConfig: () => invoke('hosts:importSshConfig'),
+    discover: () => invoke('hosts:discover'),
+    addDiscovered: (picks) => invoke('hosts:addDiscovered', picks)
   },
   creds: {
     available: () => invoke('creds:available'),
