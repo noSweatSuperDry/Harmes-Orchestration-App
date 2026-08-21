@@ -1,0 +1,761 @@
+'use strict';
+const $ = (sel) => document.querySelector(sel);
+const el = (tag, props = {}, ...kids) => {
+  const node = Object.assign(document.createElement(tag), props);
+  for (const k of kids.flat()) node.append(k?.nodeType ? k : document.createTextNode(String(k)));
+  return node;
+};
+
+const state = {
+  hosts: [],
+  selectedId: null,
+  profile: 'default',
+  profiles: ['default'],
+  tab: 'overview',
+  statuses: {},          // hostId -> { status, error }
+  data: null,            // loaded hermes profile bundle
+  overview: null,
+  memoryTab: 'memory'
+};
+
+const terminals = new Map(); // hostId -> { term, fit, wrap, termId, live }
+
+/* --------------------------------- boot ---------------------------------- */
+
+init();
+
+async function init() {
+  const ui = unwrap(await window.api.ui.get()) || {};
+  state.hosts = unwrap(await window.api.hosts.list()) || [];
+  state.tab = ui.lastTab || 'overview';
+
+  wireChrome();
+  wireEvents();
+  renderSidebar();
+
+  const remembered = state.hosts.find((h) => h.id === ui.lastHostId);
+  if (remembered) selectHost(remembered.id);
+  else if (state.hosts.length) selectHost(state.hosts[0].id);
+  else renderShellState();
+}
+
+function unwrap(res) {
+  if (!res) return null;
+  if (res.ok) return res.data;
+  throw Object.assign(new Error(res.error), { needsPassphrase: res.needsPassphrase });
+}
+
+async function call(fn, ...args) {
+  const res = await fn(...args);
+  if (res && res.ok === false) throw Object.assign(new Error(res.error), { needsPassphrase: res.needsPassphrase });
+  return res ? res.data : null;
+}
+
+/* ------------------------------- chrome ---------------------------------- */
+
+function wireChrome() {
+  $('#add-host').onclick = () => openHostModal(null);
+  $('#add-host-empty').onclick = () => openHostModal(null);
+  $('#connect-btn').onclick = onConnectClick;
+  $('#reload-btn').onclick = () => loadHostData({ force: true });
+
+  $('#profile-select').onchange = (e) => {
+    state.profile = e.target.value;
+    loadHostData({ force: true });
+  };
+
+  for (const tab of document.querySelectorAll('.tab')) {
+    tab.onclick = () => setTab(tab.dataset.tab);
+  }
+
+  $('#host-cancel').onclick = closeHostModal;
+  $('#host-form').onsubmit = onHostSubmit;
+  $('#host-delete').onclick = onHostDelete;
+  $('#pass-cancel').onclick = () => { $('#pass-modal').hidden = true; };
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { closeHostModal(); $('#pass-modal').hidden = true; }
+  });
+
+  window.addEventListener('resize', () => fitActiveTerminal());
+
+  $('#term-restart').onclick = () => restartTerminal();
+  for (const btn of document.querySelectorAll('[data-send]')) {
+    btn.onclick = () => sendToTerminal(btn.dataset.send);
+  }
+}
+
+function wireEvents() {
+  window.api.ssh.onStatus(({ hostId, status, error }) => {
+    state.statuses[hostId] = { status, error };
+    renderSidebar();
+    if (hostId === state.selectedId) {
+      renderTopbar();
+      if (status === 'disconnected' || status === 'error') {
+        state.data = null;
+        state.overview = null;
+        renderActiveTab();
+        dropTerminal(hostId);
+      }
+    }
+  });
+
+  window.api.term.onData(({ hostId, data }) => {
+    const t = terminals.get(hostId);
+    if (t) t.term.write(data);
+  });
+
+  window.api.term.onExit(({ hostId }) => {
+    const t = terminals.get(hostId);
+    if (t) { t.live = false; t.term.writeln('\r\n\x1b[90m[shell closed]\x1b[0m'); }
+    if (hostId === state.selectedId) renderTermStatus();
+  });
+}
+
+/* ------------------------------- sidebar --------------------------------- */
+
+function renderSidebar() {
+  const list = $('#host-list');
+  list.textContent = '';
+  for (const host of state.hosts) {
+    const st = state.statuses[host.id]?.status || 'disconnected';
+    const item = el('div', { className: `host-item${host.id === state.selectedId ? ' active' : ''}` },
+      el('span', { className: `dot ${st}`, title: st }),
+      el('div', { className: 'meta' },
+        el('div', { className: 'name' }, host.label || host.hostname),
+        el('div', { className: 'addr' }, `${host.username}@${host.hostname}`)),
+      el('button', { className: 'edit', title: 'Edit host', textContent: '⚙' }));
+    item.onclick = () => selectHost(host.id);
+    item.querySelector('.edit').onclick = (e) => { e.stopPropagation(); openHostModal(host); };
+    list.append(item);
+  }
+}
+
+async function selectHost(id) {
+  state.selectedId = id;
+  state.data = null;
+  state.overview = null;
+  const host = currentHost();
+  state.profile = host?.defaultProfile || 'default';
+  state.profiles = [state.profile];
+  window.api.ui.set({ lastHostId: id });
+
+  renderSidebar();
+  renderShellState();
+  renderTopbar();
+
+  const st = await call(window.api.ssh.status, id).catch(() => null);
+  if (st) state.statuses[id] = st;
+  renderTopbar();
+  renderSidebar();
+
+  if (state.statuses[id]?.status === 'connected') await loadHostData({ force: true });
+  else renderActiveTab();
+}
+
+function currentHost() {
+  return state.hosts.find((h) => h.id === state.selectedId) || null;
+}
+
+function currentStatus() {
+  return state.statuses[state.selectedId]?.status || 'disconnected';
+}
+
+/* -------------------------------- topbar --------------------------------- */
+
+function renderShellState() {
+  const has = !!currentHost();
+  $('#empty-state').hidden = has;
+  $('#tabs').hidden = !has;
+  $('#connect-btn').hidden = !has;
+  $('#reload-btn').hidden = !has;
+  $('#profile-wrap').hidden = !has;
+  if (!has) for (const p of document.querySelectorAll('.pane')) p.hidden = true;
+}
+
+function renderTopbar() {
+  const host = currentHost();
+  if (!host) {
+    $('#host-title').textContent = 'No host selected';
+    $('#host-sub').textContent = '';
+    return;
+  }
+  const st = currentStatus();
+  const err = state.statuses[host.id]?.error;
+  $('#host-title').textContent = host.label || host.hostname;
+  $('#host-sub').textContent = st === 'error' && err
+    ? `${host.username}@${host.hostname} — ${err}`
+    : `${host.username}@${host.hostname}:${host.port} · ${st}`;
+
+  const btn = $('#connect-btn');
+  btn.textContent = st === 'connected' ? 'Disconnect' : st === 'connecting' ? 'Connecting…' : 'Connect';
+  btn.className = st === 'connected' ? 'btn ghost' : 'btn';
+  btn.disabled = st === 'connecting';
+  $('#reload-btn').disabled = st !== 'connected';
+
+  const sel = $('#profile-select');
+  sel.textContent = '';
+  for (const p of state.profiles) sel.append(el('option', { value: p, textContent: p }));
+  sel.value = state.profile;
+  sel.disabled = st !== 'connected';
+}
+
+async function onConnectClick(passphrase) {
+  const host = currentHost();
+  if (!host) return;
+  if (currentStatus() === 'connected') {
+    await call(window.api.ssh.disconnect, host.id);
+    return;
+  }
+  try {
+    const info = await call(window.api.ssh.connect, host.id, typeof passphrase === 'string' ? passphrase : undefined);
+    state.profiles = info.profiles.length ? info.profiles : ['default'];
+    if (!state.profiles.includes(state.profile)) state.profile = state.profiles[0];
+    renderTopbar();
+    toast(`Connected · Hermes home ${info.home}`, 'ok');
+    await loadHostData({ force: true });
+  } catch (err) {
+    if (err.needsPassphrase) return askPassphrase(err.message);
+    toast(err.message, 'err');
+  }
+}
+
+function askPassphrase(message) {
+  const modal = $('#pass-modal');
+  const hint = $('#pass-hint');
+  hint.textContent = message || 'This key is encrypted.';
+  hint.className = message && /did not unlock/i.test(message) ? 'badge err' : 'muted sm';
+  modal.hidden = false;
+  const form = $('#pass-form');
+  form.passphrase.value = '';
+  form.passphrase.focus();
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const pass = form.passphrase.value;
+    form.passphrase.value = '';
+    modal.hidden = true;
+    await onConnectClick(pass);
+  };
+}
+
+/* -------------------------------- loading -------------------------------- */
+
+async function loadHostData() {
+  const host = currentHost();
+  if (!host || currentStatus() !== 'connected') return;
+  try {
+    state.data = await call(window.api.hermes.load, host.id, state.profile);
+    state.profiles = await call(window.api.hermes.profiles, host.id);
+    if (!state.profiles.includes(state.profile)) state.profiles.unshift(state.profile);
+    renderTopbar();
+    renderActiveTab();
+    if (state.tab === 'overview') refreshOverview();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function refreshOverview() {
+  const host = currentHost();
+  if (!host || currentStatus() !== 'connected') return;
+  try {
+    state.overview = await call(window.api.hermes.overview, host.id, state.profile);
+    if (state.tab === 'overview') renderOverview();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+/* ---------------------------------- tabs --------------------------------- */
+
+function setTab(tab) {
+  state.tab = tab;
+  window.api.ui.set({ lastTab: tab });
+  for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.dataset.tab === tab);
+  renderActiveTab();
+}
+
+function renderActiveTab() {
+  for (const pane of document.querySelectorAll('.pane')) {
+    pane.hidden = pane.id !== `pane-${state.tab}`;
+  }
+  if (!currentHost()) return;
+  switch (state.tab) {
+    case 'overview': renderOverview(); if (!state.overview) refreshOverview(); break;
+    case 'model': renderModel(); break;
+    case 'keys': renderKeys(); break;
+    case 'memory': renderMemory(); break;
+    case 'config': renderConfig(); break;
+    case 'terminal': renderTerminal(); break;
+  }
+}
+
+function notConnected(pane) {
+  pane.textContent = '';
+  pane.append(el('div', { className: 'card' },
+    el('h3', {}, 'Not connected'),
+    el('p', { className: 'muted', style: 'margin:0 0 12px' },
+      'Connect to this host to read and edit its Hermes profile.'),
+    (() => { const b = el('button', { className: 'btn', textContent: 'Connect' }); b.onclick = () => onConnectClick(); return b; })()));
+}
+
+/* ------------------------------- overview -------------------------------- */
+
+function renderOverview() {
+  const pane = $('#pane-overview');
+  if (currentStatus() !== 'connected') return notConnected(pane);
+  pane.textContent = '';
+
+  const d = state.data;
+  const o = state.overview;
+
+  const summary = el('div', { className: 'card' });
+  summary.append(el('div', { className: 'card-head' },
+    el('h3', {}, 'Profile ', el('span', { className: 'muted' }, `· ${state.profile}`)),
+    el('span', { className: `badge ${d?.exists ? 'ok' : 'err'}` }, d?.exists ? 'found' : 'not found')));
+  const rows = [
+    ['Hermes home', d?.dir || '—'],
+    ['Model', pick(d?.config, 'model.default') || '—'],
+    ['Provider', pick(d?.config, 'model.provider') || '—'],
+    ['API keys in .env', String((d?.env || []).filter((e) => e.type === 'kv').length)],
+    ['MEMORY.md', d?.memory == null ? 'missing' : `${d.memory.length} chars`],
+    ['USER.md', d?.user == null ? 'missing' : `${d.user.length} chars`]
+  ];
+  const table = el('table', { className: 'kv' });
+  for (const [k, v] of rows) {
+    table.append(el('tr', {}, el('td', { className: 'muted', style: 'width:150px' }, k), el('td', {}, v)));
+  }
+  summary.append(table);
+  pane.append(summary);
+
+  pane.append(outCard('hermes profile', o?.profile, !o));
+  pane.append(outCard('hermes auth list', o?.auth, !o));
+  pane.append(outCard('System', [o?.version, o?.system].filter(Boolean).join('\n'), !o));
+
+  const refresh = el('button', { className: 'btn ghost sm', textContent: 'Refresh probes' });
+  refresh.onclick = () => { state.overview = null; renderOverview(); refreshOverview(); };
+  pane.append(refresh);
+}
+
+function outCard(title, body, loading) {
+  return el('div', { className: 'card' },
+    el('h3', {}, title),
+    el('pre', { className: 'out' }, loading ? 'running…' : (body || '(no output)')));
+}
+
+function pick(obj, dotted) {
+  return dotted.split('.').reduce((acc, k) => (acc == null ? acc : acc[k]), obj);
+}
+
+/* --------------------------------- model --------------------------------- */
+
+function renderModel() {
+  const pane = $('#pane-model');
+  if (currentStatus() !== 'connected') return notConnected(pane);
+  pane.textContent = '';
+  const d = state.data;
+
+  if (!d || d.configText == null) {
+    pane.append(el('div', { className: 'card' }, el('h3', {}, 'config.yaml not found'),
+      el('p', { className: 'muted' }, `Looked in ${d?.dir || '?'}/config.yaml`)));
+    return;
+  }
+  if (d.configError) {
+    pane.append(el('div', { className: 'card' }, el('h3', {}, 'config.yaml could not be parsed'),
+      el('pre', { className: 'out' }, d.configError),
+      el('p', { className: 'muted sm' }, 'Fix it under the “Raw config” tab.')));
+    return;
+  }
+
+  const pending = {};
+  const flat = flatten(d.config);
+
+  const primary = el('div', { className: 'card' }, el('h3', {}, 'Model & provider'));
+  for (const key of ['model.default', 'model.provider']) {
+    primary.append(fieldFor(key, flat[key] ?? '', pending));
+  }
+  pane.append(primary);
+
+  const rest = Object.keys(flat).filter((k) => !k.startsWith('model.')).sort();
+  if (rest.length) {
+    const other = el('div', { className: 'card' },
+      el('h3', {}, 'All other settings ', el('span', { className: 'muted' }, `· ${rest.length} keys`)));
+    const table = el('table', { className: 'kv' });
+    table.append(el('tr', {}, el('th', {}, 'Key'), el('th', {}, 'Value')));
+    for (const key of rest) table.append(configRow(key, flat[key], pending));
+    other.append(table);
+    pane.append(other);
+  }
+
+  const extraKeys = Object.keys(flat).filter((k) => k.startsWith('model.') && !['model.default', 'model.provider'].includes(k));
+  if (extraKeys.length) {
+    const more = el('div', { className: 'card' }, el('h3', {}, 'Other model settings'));
+    const table = el('table', { className: 'kv' });
+    for (const key of extraKeys.sort()) table.append(configRow(key, flat[key], pending));
+    more.append(table);
+    pane.append(more);
+  }
+
+  const save = el('button', { className: 'btn', textContent: 'Save changes', disabled: true });
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      await call(window.api.hermes.patchConfig, state.selectedId, state.profile, pending);
+      toast('config.yaml updated', 'ok');
+      await loadHostData();
+      refreshOverview();
+    } catch (err) {
+      toast(err.message, 'err');
+      save.disabled = false;
+    }
+  };
+  pane.append(el('div', { className: 'row' }, save,
+    el('span', { className: 'muted sm', style: 'align-self:center' },
+      'Comments and formatting in config.yaml are preserved.')));
+  pane.oninput = () => { save.disabled = Object.keys(pending).length === 0; };
+}
+
+function fieldFor(key, value, pending) {
+  const input = el('input', { value: value == null ? '' : String(value) });
+  input.oninput = () => { pending[key] = input.value; };
+  return el('label', { className: 'field' }, el('span', {}, key), input);
+}
+
+function configRow(key, value, pending) {
+  const isScalar = value === null || ['string', 'number', 'boolean'].includes(typeof value);
+  const cell = el('td');
+  if (isScalar) {
+    const input = el('input', { value: value == null ? '' : String(value) });
+    input.oninput = () => { pending[key] = input.value; };
+    cell.append(input);
+  } else {
+    cell.append(el('div', { className: 'readonly-val', title: JSON.stringify(value) }, JSON.stringify(value)));
+  }
+  return el('tr', {}, el('td', { className: 'muted', style: 'width:38%' }, key), cell);
+}
+
+function flatten(obj, prefix = '', out = {}) {
+  for (const [k, v] of Object.entries(obj || {})) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (v && typeof v === 'object' && !Array.isArray(v)) flatten(v, key, out);
+    else out[key] = v;
+  }
+  return out;
+}
+
+/* --------------------------------- keys ---------------------------------- */
+
+function renderKeys() {
+  const pane = $('#pane-keys');
+  if (currentStatus() !== 'connected') return notConnected(pane);
+  pane.textContent = '';
+  const d = state.data;
+
+  const entries = (d?.env || []).filter((e) => e.type === 'kv').map((e) => ({ key: e.key, value: e.value, deleted: false }));
+  const card = el('div', { className: 'card' });
+  card.append(el('div', { className: 'card-head' },
+    el('h3', {}, '.env ', el('span', { className: 'muted' }, `· ${d?.dir || ''}/.env`)),
+    el('span', { className: 'badge' }, 'chmod 600')));
+
+  const table = el('table', { className: 'kv' });
+  table.append(el('tr', {}, el('th', {}, 'Name'), el('th', {}, 'Value'), el('th', {})));
+  const body = el('tbody');
+  table.append(body);
+  card.append(table);
+
+  const markDirty = () => { save.disabled = false; };
+
+  const addRow = (entry) => {
+    const keyInput = el('input', { value: entry.key });
+    const valInput = el('input', { value: entry.value, type: 'password' });
+    keyInput.oninput = () => { entry.key = keyInput.value.trim(); markDirty(); };
+    valInput.oninput = () => { entry.value = valInput.value; markDirty(); };
+
+    const eye = el('button', { className: 'icon-btn', textContent: '👁', title: 'Reveal' });
+    eye.onclick = () => { valInput.type = valInput.type === 'password' ? 'text' : 'password'; };
+
+    const del = el('button', { className: 'icon-btn', textContent: '✕', title: 'Delete' });
+    const row = el('tr', {}, el('td', {}, keyInput), el('td', {}, valInput),
+      el('td', {}, eye, del));
+    del.onclick = () => {
+      entry.deleted = !entry.deleted;
+      row.classList.toggle('deleted', entry.deleted);
+      del.textContent = entry.deleted ? '↺' : '✕';
+      markDirty();
+    };
+    body.append(row);
+  };
+
+  for (const entry of entries) addRow(entry);
+  pane.append(card);
+
+  const add = el('button', { className: 'btn ghost sm', textContent: '+ Add key' });
+  add.onclick = () => {
+    const entry = { key: '', value: '', deleted: false };
+    entries.push(entry);
+    addRow(entry);
+  };
+
+  const save = el('button', { className: 'btn', textContent: 'Save .env', disabled: true });
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      await call(window.api.hermes.saveEnv, state.selectedId, state.profile,
+        entries.map(({ key, value, deleted }) => ({ key, value, deleted })));
+      toast('.env written (mode 600)', 'ok');
+      await loadHostData();
+      renderKeys();
+    } catch (err) {
+      toast(err.message, 'err');
+      save.disabled = false;
+    }
+  };
+
+  pane.append(el('div', { className: 'row' }, add, el('span', { className: 'grow' }), save));
+
+  if (d?.auth?.entries?.length) {
+    const auth = el('div', { className: 'card', style: 'margin-top:14px' },
+      el('h3', {}, 'auth.json ', el('span', { className: 'muted' }, '· OAuth credentials (read-only)')));
+    const t = el('table', { className: 'kv' });
+    t.append(el('tr', {}, el('th', {}, 'Credential'), el('th', {}, 'Expires')));
+    for (const c of d.auth.entries) {
+      t.append(el('tr', {}, el('td', {}, c.name), el('td', { className: 'muted' }, c.expires || '—')));
+    }
+    auth.append(t);
+    pane.append(auth);
+  }
+}
+
+/* -------------------------------- memory --------------------------------- */
+
+const MEMORY_TABS = [
+  ['memory', 'MEMORY.md', 'Environment facts and learned conventions'],
+  ['user', 'USER.md', 'Your preferences, identity, communication style'],
+  ['soul', 'SOUL.md', 'Agent personality']
+];
+
+function renderMemory() {
+  const pane = $('#pane-memory');
+  if (currentStatus() !== 'connected') return notConnected(pane);
+  pane.textContent = '';
+  const d = state.data;
+
+  const subtabs = el('div', { className: 'subtabs' });
+  for (const [id, label] of MEMORY_TABS) {
+    const b = el('button', { textContent: label, className: state.memoryTab === id ? 'active' : '' });
+    b.onclick = () => { state.memoryTab = id; renderMemory(); };
+    subtabs.append(b);
+  }
+  pane.append(subtabs);
+
+  const [, label, hint] = MEMORY_TABS.find(([id]) => id === state.memoryTab);
+  const value = d?.[state.memoryTab];
+
+  const area = el('textarea', { value: value ?? '', rows: 22, spellcheck: false });
+  const save = el('button', { className: 'btn', textContent: `Save ${label}`, disabled: true });
+  area.oninput = () => { save.disabled = false; };
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      await call(window.api.hermes.saveMemory, state.selectedId, state.profile, state.memoryTab, area.value);
+      toast(`${label} saved`, 'ok');
+      await loadHostData();
+    } catch (err) {
+      toast(err.message, 'err');
+      save.disabled = false;
+    }
+  };
+
+  const card = el('div', { className: 'card' },
+    el('div', { className: 'card-head' },
+      el('h3', {}, label, ' ', el('span', { className: 'muted' }, `· ${hint}`)),
+      el('span', { className: `badge ${value == null ? 'err' : 'ok'}` }, value == null ? 'not created' : 'on disk')),
+    area);
+  pane.append(card);
+  pane.append(el('div', { className: 'row' }, save,
+    el('span', { className: 'muted sm', style: 'align-self:center' },
+      'Hermes snapshots memory at session start — restart the session to pick this up.')));
+}
+
+/* ------------------------------ raw config ------------------------------- */
+
+function renderConfig() {
+  const pane = $('#pane-config');
+  if (currentStatus() !== 'connected') return notConnected(pane);
+  pane.textContent = '';
+  const d = state.data;
+
+  const area = el('textarea', { value: d?.configText ?? '', rows: 26, spellcheck: false });
+  const save = el('button', { className: 'btn', textContent: 'Save config.yaml', disabled: true });
+  area.oninput = () => { save.disabled = false; };
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      await call(window.api.hermes.saveConfigRaw, state.selectedId, state.profile, area.value);
+      toast('config.yaml saved', 'ok');
+      await loadHostData();
+    } catch (err) {
+      toast(`Not saved — ${err.message}`, 'err');
+      save.disabled = false;
+    }
+  };
+
+  pane.append(el('div', { className: 'card' },
+    el('div', { className: 'card-head' },
+      el('h3', {}, 'config.yaml'),
+      el('span', { className: 'muted sm' }, `${d?.dir || ''}/config.yaml`)),
+    area));
+  pane.append(el('div', { className: 'row' }, save,
+    el('span', { className: 'muted sm', style: 'align-self:center' }, 'Validated as YAML before writing.')));
+}
+
+/* ------------------------------- terminal -------------------------------- */
+
+function renderTerminal() {
+  const pane = $('#pane-terminal');
+  const hosts = $('#term-hosts');
+  if (currentStatus() !== 'connected') {
+    for (const w of hosts.children) w.hidden = true;
+    renderTermStatus('not connected');
+    return;
+  }
+  const hostId = state.selectedId;
+  for (const w of hosts.children) w.hidden = w.dataset.host !== hostId;
+
+  let t = terminals.get(hostId);
+  if (!t) t = createTerminal(hostId);
+  t.wrap.hidden = false;
+  requestAnimationFrame(() => { fitActiveTerminal(); t.term.focus(); });
+  renderTermStatus();
+  void pane;
+}
+
+function createTerminal(hostId) {
+  const wrap = el('div', { className: 'term-host' });
+  wrap.dataset.host = hostId;
+  $('#term-hosts').append(wrap);
+
+  const term = new window.Terminal({
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    fontSize: 12.5,
+    cursorBlink: true,
+    theme: { background: '#0b0d12', foreground: '#d6dbe6', cursor: '#6ea8fe', selectionBackground: '#2b3550' }
+  });
+  const fit = new window.FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(wrap);
+
+  const termId = `t-${hostId}`;
+  term.onData((data) => window.api.term.write(hostId, termId, data));
+  term.onResize(({ cols, rows }) => window.api.term.resize(hostId, termId, cols, rows));
+
+  const entry = { term, fit, wrap, termId, live: false };
+  terminals.set(hostId, entry);
+
+  call(window.api.term.open, hostId, termId, { cols: term.cols || 100, rows: term.rows || 30 })
+    .then(() => { entry.live = true; renderTermStatus(); })
+    .catch((err) => { term.writeln(`\x1b[31m${err.message}\x1b[0m`); });
+
+  return entry;
+}
+
+function fitActiveTerminal() {
+  if (state.tab !== 'terminal') return;
+  const t = terminals.get(state.selectedId);
+  if (!t || t.wrap.hidden) return;
+  try { t.fit.fit(); } catch {}
+}
+
+function dropTerminal(hostId) {
+  const t = terminals.get(hostId);
+  if (!t) return;
+  t.term.dispose();
+  t.wrap.remove();
+  terminals.delete(hostId);
+}
+
+function renderTermStatus(text) {
+  const t = terminals.get(state.selectedId);
+  $('#term-status').textContent = text || (t?.live ? `shell open · ${currentHost()?.username}@${currentHost()?.hostname}` : 'no shell');
+}
+
+function sendToTerminal(what) {
+  const t = terminals.get(state.selectedId);
+  if (!t || !t.live) return;
+  const line = what === 'clear' ? 'clear' : what;
+  window.api.term.write(state.selectedId, t.termId, `${line}\n`);
+  t.term.focus();
+}
+
+async function restartTerminal() {
+  const hostId = state.selectedId;
+  const t = terminals.get(hostId);
+  if (t) { await call(window.api.term.close, hostId, t.termId).catch(() => {}); dropTerminal(hostId); }
+  renderTerminal();
+}
+
+/* ------------------------------ host modal ------------------------------- */
+
+function openHostModal(host) {
+  const form = $('#host-form');
+  form.reset();
+  $('#host-modal-title').textContent = host ? 'Edit host' : 'Add host';
+  $('#host-delete').hidden = !host;
+  form.hostId.value = host?.id || '';
+  form.label.value = host?.label || '';
+  form.hostname.value = host?.hostname || '';
+  form.port.value = host?.port || 22;
+  form.username.value = host?.username || 'zahid';
+  form.defaultProfile.value = host?.defaultProfile || 'default';
+  form.hermesHome.value = host?.hermesHome || '';
+  window.api.hosts.defaultKey().then((res) => {
+    form.privateKeyPath.value = host?.privateKeyPath || (res.ok ? res.data : '');
+  });
+  $('#host-modal').hidden = false;
+  form.hostname.focus();
+}
+
+function closeHostModal() { $('#host-modal').hidden = true; }
+
+async function onHostSubmit(e) {
+  e.preventDefault();
+  const form = e.target;
+  const payload = Object.fromEntries(new FormData(form).entries());
+  payload.id = payload.hostId || undefined;
+  delete payload.hostId;
+  try {
+    const saved = await call(window.api.hosts.save, payload);
+    state.hosts = await call(window.api.hosts.list);
+    closeHostModal();
+    renderSidebar();
+    renderShellState();
+    selectHost(saved.id);
+    toast('Host saved', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function onHostDelete() {
+  const id = $('#host-form').hostId.value;
+  if (!id) return;
+  await call(window.api.hosts.remove, id);
+  dropTerminal(id);
+  state.hosts = await call(window.api.hosts.list);
+  closeHostModal();
+  state.selectedId = null;
+  state.data = null;
+  renderSidebar();
+  renderShellState();
+  renderTopbar();
+  if (state.hosts.length) selectHost(state.hosts[0].id);
+  toast('Host removed', 'ok');
+}
+
+/* -------------------------------- toasts --------------------------------- */
+
+function toast(message, kind = '') {
+  const node = el('div', { className: `toast ${kind}` }, message);
+  $('#toasts').append(node);
+  setTimeout(() => node.remove(), 4200);
+}

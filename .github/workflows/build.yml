@@ -1,0 +1,46 @@
+name: Build installers
+
+# Cross-compiling a Windows installer from macOS needs Wine and is fragile.
+# Building each target on its own runner avoids that entirely.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            script: dist:mac
+            artifact: dmg
+            pattern: release/*.dmg
+          - os: windows-latest
+            script: dist:win
+            artifact: exe
+            pattern: release/*.exe
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build ${{ matrix.artifact }}
+        run: npm run ${{ matrix.script }}
+        env:
+          # No signing certificates in CI — unsigned artifacts.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hermes-orchestrator-${{ matrix.artifact }}
+          path: ${{ matrix.pattern }}
+          if-no-files-found: error

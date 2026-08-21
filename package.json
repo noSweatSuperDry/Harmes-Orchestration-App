@@ -1,0 +1,91 @@
+{
+  "name": "hermes-orchestrator",
+  "version": "0.1.0",
+  "description": "Desktop control panel for Hermes AI harness across multiple VPS hosts",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
+    "dist:mac:signed": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
+  },
+  "author": "zahid",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "ssh2": "^1.16.0",
+    "yaml": "^2.6.1"
+  },
+  "build": {
+    "appId": "com.zahid.hermes-orchestrator",
+    "productName": "Hermes Orchestrator",
+    "copyright": "Copyright \u00a9 2026 zahid",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "npmRebuild": false,
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/ssh2/lib/protocol/crypto/build/**",
+      "!node_modules/**/*.map",
+      "!node_modules/**/{test,tests,__tests__,example,examples,docs}/**",
+      "!node_modules/cpu-features/**",
+      "!node_modules/nan/**"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png"
+    },
+    "dmg": {
+      "title": "${productName}",
+      "contents": [
+        {
+          "x": 140,
+          "y": 190,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 190,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Hermes Orchestrator"
+    }
+  }
+}

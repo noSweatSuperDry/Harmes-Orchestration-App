@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' data:; font-src 'self' file:;" />
+  <title>Hermes Orchestrator</title>
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="titlebar"></div>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <span>Hosts</span>
+        <button id="add-host" class="icon-btn" title="Add host">+</button>
+      </div>
+      <div id="host-list" class="host-list"></div>
+      <div class="sidebar-foot">Hermes Orchestrator v0.1</div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-id">
+          <h1 id="host-title">No host selected</h1>
+          <span id="host-sub" class="muted"></span>
+        </div>
+        <div class="topbar-actions">
+          <label class="field-inline" id="profile-wrap" hidden>
+            <span>Profile</span>
+            <select id="profile-select"></select>
+          </label>
+          <button id="reload-btn" class="btn ghost" hidden>Reload</button>
+          <button id="connect-btn" class="btn" hidden>Connect</button>
+        </div>
+      </header>
+
+      <nav class="tabs" id="tabs" hidden>
+        <button data-tab="overview" class="tab active">Overview</button>
+        <button data-tab="model" class="tab">Model</button>
+        <button data-tab="keys" class="tab">API Keys</button>
+        <button data-tab="memory" class="tab">Memory</button>
+        <button data-tab="config" class="tab">Raw config</button>
+        <button data-tab="terminal" class="tab">Terminal</button>
+      </nav>
+
+      <section class="content" id="content">
+        <div class="empty" id="empty-state">
+          <h2>No host yet</h2>
+          <p>Add a VPS to control its Hermes install — model, API keys, memory and a live shell.</p>
+          <button id="add-host-empty" class="btn">Add your first host</button>
+        </div>
+
+        <div class="pane" id="pane-overview" hidden></div>
+        <div class="pane" id="pane-model" hidden></div>
+        <div class="pane" id="pane-keys" hidden></div>
+        <div class="pane" id="pane-memory" hidden></div>
+        <div class="pane" id="pane-config" hidden></div>
+        <div class="pane pane-term" id="pane-terminal" hidden>
+          <div class="term-toolbar">
+            <button class="btn ghost sm" data-send="hermes">Run hermes</button>
+            <button class="btn ghost sm" data-send="clear">Clear screen</button>
+            <button class="btn ghost sm" id="term-restart">Restart shell</button>
+            <span class="muted sm" id="term-status"></span>
+          </div>
+          <div id="term-hosts" class="term-hosts"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Host editor -->
+  <div class="modal-backdrop" id="host-modal" hidden>
+    <div class="modal">
+      <h2 id="host-modal-title">Add host</h2>
+      <form id="host-form">
+        <input type="hidden" name="hostId" />
+        <label class="field"><span>Label</span>
+          <input name="label" placeholder="prod-1" autocomplete="off" /></label>
+        <div class="row">
+          <label class="field grow"><span>Hostname or IP</span>
+            <input name="hostname" placeholder="vps.example.com" required autocomplete="off" /></label>
+          <label class="field w-90"><span>Port</span>
+            <input name="port" type="number" value="22" /></label>
+        </div>
+        <div class="row">
+          <label class="field grow"><span>SSH user</span>
+            <input name="username" value="zahid" autocomplete="off" /></label>
+          <label class="field grow"><span>Default profile</span>
+            <input name="defaultProfile" value="default" autocomplete="off" /></label>
+        </div>
+        <label class="field"><span>Private key path</span>
+          <input name="privateKeyPath" autocomplete="off" /></label>
+        <label class="field"><span>Hermes home <em>(blank = $HERMES_HOME or ~/.hermes)</em></span>
+          <input name="hermesHome" placeholder="" autocomplete="off" /></label>
+        <div class="modal-actions">
+          <button type="button" class="btn danger ghost" id="host-delete" hidden>Delete</button>
+          <span class="grow"></span>
+          <button type="button" class="btn ghost" id="host-cancel">Cancel</button>
+          <button type="submit" class="btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Passphrase -->
+  <div class="modal-backdrop" id="pass-modal" hidden>
+    <div class="modal narrow">
+      <h2>Key passphrase</h2>
+      <p id="pass-hint" class="muted sm">This key is encrypted.</p>
+      <p class="muted sm">Used once for this connection and never written to disk.</p>
+      <form id="pass-form">
+        <label class="field"><span>Passphrase</span>
+          <input name="passphrase" type="password" autocomplete="off" /></label>
+        <div class="modal-actions">
+          <span class="grow"></span>
+          <button type="button" class="btn ghost" id="pass-cancel">Cancel</button>
+          <button type="submit" class="btn">Unlock</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toasts" class="toasts"></div>
+
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
