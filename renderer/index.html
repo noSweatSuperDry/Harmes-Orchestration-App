@@ -18,14 +18,17 @@
         <button id="add-host" class="icon-btn" title="Add host">+</button>
       </div>
       <div id="host-list" class="host-list"></div>
-      <div class="sidebar-foot">Hermes Orchestrator v0.1</div>
+      <div class="sidebar-foot" id="sidebar-foot"></div>
     </aside>
 
     <main class="main">
       <header class="topbar">
-        <div class="topbar-id">
+        <div class="topbar-id" style="display:flex;align-items:center;gap:11px">
+          <span id="topbar-agent"></span>
+          <div>
           <h1 id="host-title">No host selected</h1>
           <span id="host-sub" class="muted"></span>
+          </div>
         </div>
         <div class="topbar-actions">
           <label class="field-inline" id="profile-wrap" hidden>
@@ -39,6 +42,7 @@
 
       <nav class="tabs" id="tabs" hidden>
         <button data-tab="overview" class="tab active">Overview</button>
+        <button data-tab="telemetry" class="tab">Telemetry</button>
         <button data-tab="model" class="tab">Model</button>
         <button data-tab="keys" class="tab">API Keys</button>
         <button data-tab="memory" class="tab">Memory</button>
@@ -54,6 +58,7 @@
         </div>
 
         <div class="pane" id="pane-overview" hidden></div>
+        <div class="pane pane-wide" id="pane-telemetry" hidden></div>
         <div class="pane" id="pane-model" hidden></div>
         <div class="pane" id="pane-keys" hidden></div>
         <div class="pane" id="pane-memory" hidden></div>

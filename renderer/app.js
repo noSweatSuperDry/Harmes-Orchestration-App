@@ -15,8 +15,17 @@ const state = {
   statuses: {},          // hostId -> { status, error }
   data: null,            // loaded hermes profile bundle
   overview: null,
-  memoryTab: 'memory'
+  memoryTab: 'memory',
+  agents: {},          // hostId -> { state, cpu, procs, oldest }
+  termActivity: {},    // hostId -> ms of last PTY output
+  telemetry: null,
+  autoRefresh: true,
+  motion: 'always'
 };
+
+let telemetryTimer = null;
+let pulseTimer = null;
+let telemetryBusy = false;
 
 const terminals = new Map(); // hostId -> { term, fit, wrap, termId, live }
 
@@ -28,15 +37,20 @@ async function init() {
   const ui = unwrap(await window.api.ui.get()) || {};
   state.hosts = unwrap(await window.api.hosts.list()) || [];
   state.tab = ui.lastTab || 'overview';
+  state.motion = ui.motion || 'always';
+  applyMotion();
 
   wireChrome();
   wireEvents();
+  renderMotionControl();
   renderSidebar();
 
   const remembered = state.hosts.find((h) => h.id === ui.lastHostId);
   if (remembered) selectHost(remembered.id);
   else if (state.hosts.length) selectHost(state.hosts[0].id);
   else renderShellState();
+
+  syncPolling();
 }
 
 function unwrap(res) {
@@ -89,11 +103,14 @@ function wireEvents() {
   window.api.ssh.onStatus(({ hostId, status, error }) => {
     state.statuses[hostId] = { status, error };
     renderSidebar();
+    syncPolling();
     if (hostId === state.selectedId) {
       renderTopbar();
       if (status === 'disconnected' || status === 'error') {
         state.data = null;
         state.overview = null;
+        state.telemetry = null;
+        delete state.agents[hostId];
         renderActiveTab();
         dropTerminal(hostId);
       }
@@ -101,8 +118,10 @@ function wireEvents() {
   });
 
   window.api.term.onData(({ hostId, data }) => {
+    state.termActivity[hostId] = Date.now();
     const t = terminals.get(hostId);
     if (t) t.term.write(data);
+    paintAgents();
   });
 
   window.api.term.onExit(({ hostId }) => {
@@ -124,6 +143,7 @@ function renderSidebar() {
       el('div', { className: 'meta' },
         el('div', { className: 'name' }, host.label || host.hostname),
         el('div', { className: 'addr' }, `${host.username}@${host.hostname}`)),
+      agentAvatar(agentStateFor(host.id).state, 20),
       el('button', { className: 'edit', title: 'Edit host', textContent: '⚙' }));
     item.onclick = () => selectHost(host.id);
     item.querySelector('.edit').onclick = (e) => { e.stopPropagation(); openHostModal(host); };
@@ -140,6 +160,7 @@ async function selectHost(id) {
   state.profiles = [state.profile];
   window.api.ui.set({ lastHostId: id });
 
+  state.telemetry = null;
   renderSidebar();
   renderShellState();
   renderTopbar();
@@ -149,6 +170,8 @@ async function selectHost(id) {
   renderTopbar();
   renderSidebar();
 
+  paintAgents();
+  syncPolling();
   if (state.statuses[id]?.status === 'connected') await loadHostData({ force: true });
   else renderActiveTab();
 }
@@ -186,6 +209,10 @@ function renderTopbar() {
   $('#host-sub').textContent = st === 'error' && err
     ? `${host.username}@${host.hostname} — ${err}`
     : `${host.username}@${host.hostname}:${host.port} · ${st}`;
+
+  const slot = $('#topbar-agent');
+  slot.textContent = '';
+  slot.append(agentAvatar(agentStateFor(host.id).state, 30));
 
   const btn = $('#connect-btn');
   btn.textContent = st === 'connected' ? 'Disconnect' : st === 'connecting' ? 'Connecting…' : 'Connect';
@@ -273,6 +300,7 @@ function setTab(tab) {
   window.api.ui.set({ lastTab: tab });
   for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.dataset.tab === tab);
   renderActiveTab();
+  syncPolling();
 }
 
 function renderActiveTab() {
@@ -282,6 +310,7 @@ function renderActiveTab() {
   if (!currentHost()) return;
   switch (state.tab) {
     case 'overview': renderOverview(); if (!state.overview) refreshOverview(); break;
+    case 'telemetry': renderTelemetry(); refreshTelemetry(); break;
     case 'model': renderModel(); break;
     case 'keys': renderKeys(); break;
     case 'memory': renderMemory(); break;
@@ -308,6 +337,12 @@ function renderOverview() {
 
   const d = state.data;
   const o = state.overview;
+
+  const activity = el('div', { className: 'card' });
+  const block = agentBlock(state.selectedId, 52);
+  block.dataset.agentBlock = '52';
+  activity.append(block);
+  pane.append(activity);
 
   const summary = el('div', { className: 'card' });
   summary.append(el('div', { className: 'card-head' },
@@ -758,4 +793,391 @@ function toast(message, kind = '') {
   const node = el('div', { className: `toast ${kind}` }, message);
   $('#toasts').append(node);
   setTimeout(() => node.remove(), 4200);
+}
+
+/* -------------------------------- motion --------------------------------- */
+
+/** 'always' | 'off' | 'system' — system defers to prefers-reduced-motion. */
+function motionEnabled() {
+  if (state.motion === 'always') return true;
+  if (state.motion === 'off') return false;
+  return !matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function applyMotion() {
+  document.documentElement.dataset.motion = motionEnabled() ? 'on' : 'off';
+}
+
+function setMotion(mode) {
+  state.motion = mode;
+  window.api.ui.set({ motion: mode });
+  applyMotion();
+  renderMotionControl();
+}
+
+function renderMotionControl() {
+  const foot = $('#sidebar-foot');
+  if (!foot) return;
+  foot.textContent = '';
+  const sel = el('select', { style: 'width:auto;padding:2px 4px;font-size:11px' });
+  for (const [v, label] of [['always', 'Always on'], ['system', 'Follow system'], ['off', 'Off']]) {
+    sel.append(el('option', { value: v, textContent: label }));
+  }
+  sel.value = state.motion;
+  sel.onchange = () => setMotion(sel.value);
+
+  const suppressed = state.motion === 'system' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  foot.append(
+    el('div', { className: 'field-inline' }, el('span', {}, 'Animation'), sel),
+    suppressed
+      ? el('div', { className: 'sm', style: 'margin-top:5px;color:var(--warn)' },
+          'Suppressed by macOS Reduce Motion')
+      : ''
+  );
+}
+
+/* ============================ agent activity ============================== */
+
+const AGENT_LABEL = {
+  offline:  ['Offline',  'not connected'],
+  asleep:   ['Sleeping', 'no hermes process running'],
+  idle:     ['Idle',     'process up, waiting for input'],
+  thinking: ['Thinking', 'light CPU activity'],
+  working:  ['Working',  'heavy CPU or streaming output']
+};
+
+const AVATAR_SVG = `
+  <circle class="halo" cx="24" cy="24" r="14"/>
+  <circle class="ring" cx="24" cy="24" r="20"/>
+  <path    class="arc" d="M24 6 A18 18 0 0 1 42 24"/>
+  <circle class="core" cx="24" cy="24" r="8"/>
+  <g class="dots">
+    <circle class="dot" cx="14" cy="24" r="3.2"/>
+    <circle class="dot" cx="24" cy="24" r="3.2"/>
+    <circle class="dot" cx="34" cy="24" r="3.2"/>
+  </g>
+  <g class="zzz"><text x="30" y="15">z</text><text x="37" y="8">z</text></g>`;
+
+function agentAvatar(agentState, size = 40) {
+  const wrap = el('span', { className: 'agent', title: AGENT_LABEL[agentState]?.[0] || agentState });
+  wrap.dataset.state = agentState;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 48 48');
+  svg.setAttribute('width', size);
+  svg.setAttribute('height', size);
+  svg.innerHTML = AVATAR_SVG;
+  wrap.append(svg);
+  return wrap;
+}
+
+/** Terminal output wins: if bytes are streaming, the agent is demonstrably busy. */
+function agentStateFor(hostId) {
+  if ((state.statuses[hostId]?.status) !== 'connected') return { state: 'offline' };
+  if (Date.now() - (state.termActivity[hostId] || 0) < 2500) {
+    return { ...(state.agents[hostId] || {}), state: 'working', viaTerminal: true };
+  }
+  return state.agents[hostId] || { state: 'offline', pending: true };
+}
+
+function agentDetail(info) {
+  if (info.viaTerminal) return 'streaming output to the terminal';
+  if (info.pending) return 'checking…';
+  const base = AGENT_LABEL[info.state]?.[1] || '';
+  if (info.state === 'asleep' || info.state === 'offline') return base;
+  const bits = [];
+  if (info.cpu != null) bits.push(`${info.cpu}% CPU`);
+  if (info.procs) bits.push(`${info.procs} process${info.procs > 1 ? 'es' : ''}`);
+  if (info.oldest) bits.push(`up ${fmtDuration(info.oldest)}`);
+  return bits.join(' · ') || base;
+}
+
+function agentBlock(hostId, size = 52) {
+  const info = agentStateFor(hostId);
+  const [label] = AGENT_LABEL[info.state] || ['Unknown'];
+  return el('div', { className: 'agent-block' },
+    agentAvatar(info.state, size),
+    el('div', {},
+      el('div', { className: 'label' }, info.pending ? 'Checking…' : label),
+      el('div', { className: 'detail' }, agentDetail(info))));
+}
+
+/** Repaint just the avatars — never re-render panes holding user input. */
+function paintAgents() {
+  renderSidebar();
+  const slot = $('#topbar-agent');
+  if (slot && currentHost()) {
+    slot.textContent = '';
+    slot.append(agentAvatar(agentStateFor(state.selectedId).state, 30));
+  }
+  for (const node of document.querySelectorAll('[data-agent-block]')) {
+    const fresh = agentBlock(state.selectedId, Number(node.dataset.agentBlock) || 52);
+    fresh.dataset.agentBlock = node.dataset.agentBlock;
+    node.replaceWith(fresh);
+  }
+}
+
+/* ------------------------------- polling --------------------------------- */
+
+function syncPolling() {
+  clearInterval(pulseTimer);
+  clearInterval(telemetryTimer);
+
+  const anyConnected = state.hosts.some((h) => state.statuses[h.id]?.status === 'connected');
+  if (anyConnected) {
+    pulseTimer = setInterval(pollPulses, 4000);
+    pollPulses();
+  }
+  if (state.tab === 'telemetry' && state.autoRefresh && currentStatus() === 'connected') {
+    telemetryTimer = setInterval(() => refreshTelemetry(), 5000);
+  }
+}
+
+async function pollPulses() {
+  const connected = state.hosts.filter((h) => state.statuses[h.id]?.status === 'connected');
+  await Promise.all(connected.map(async (h) => {
+    try { state.agents[h.id] = await call(window.api.telemetry.pulse, h.id); }
+    catch { delete state.agents[h.id]; }
+  }));
+  paintAgents();
+}
+
+async function refreshTelemetry() {
+  if (telemetryBusy || currentStatus() !== 'connected') return;
+  telemetryBusy = true;
+  const hostId = state.selectedId;
+  try {
+    const data = await call(window.api.telemetry.collect, hostId);
+    if (hostId !== state.selectedId) return;
+    state.telemetry = data;
+    if (data.hermes) state.agents[hostId] = { ...(state.agents[hostId] || {}), ...deriveFromHermes(data.hermes) };
+    if (state.tab === 'telemetry') renderTelemetry();
+  } catch (err) {
+    if (state.tab === 'telemetry') toast(err.message, 'err');
+  } finally {
+    telemetryBusy = false;
+  }
+}
+
+function deriveFromHermes(procs) {
+  if (!procs.length) return { state: 'asleep', cpu: 0, procs: 0, oldest: 0 };
+  const cpu = Math.round(procs.reduce((a, p) => a + p.cpu, 0) * 10) / 10;
+  const oldest = Math.max(...procs.map((p) => p.etimeSeconds || 0));
+  return { state: cpu >= 15 ? 'working' : cpu >= 1.5 ? 'thinking' : 'idle', cpu, procs: procs.length, oldest };
+}
+
+/* ============================== formatting =============================== */
+
+function fmtBytes(b, digits = 1) {
+  if (!b || b < 0) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  const i = Math.min(u.length - 1, Math.floor(Math.log(b) / Math.log(1024)));
+  return `${(b / 1024 ** i).toFixed(i ? digits : 0)} ${u[i]}`;
+}
+const fmtRate = (b) => `${fmtBytes(b)}/s`;
+
+function fmtDuration(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m`;
+  return `${sec}s`;
+}
+
+function meter(name, percent, valueText) {
+  const pct = Math.max(0, Math.min(100, percent || 0));
+  const cls = pct >= 90 ? 'crit' : pct >= 75 ? 'warn' : '';
+  return el('div', { className: 'meter' },
+    el('div', { className: 'meter-top' },
+      el('span', { className: 'm-name' }, name),
+      el('span', { className: 'm-val' }, valueText)),
+    el('div', { className: 'meter-track' },
+      el('div', { className: `meter-fill ${cls}`, style: `width:${pct}%` })));
+}
+
+const stat = (k, v) => el('div', { className: 'stat' }, el('div', { className: 'v' }, v), el('div', { className: 'k' }, k));
+
+function dataTable(headers, rows) {
+  const t = el('table', { className: 'data' });
+  t.append(el('tr', {}, headers.map((h) => el('th', {}, h))));
+  for (const r of rows) {
+    t.append(el('tr', {}, r.map((cell) => {
+      const c = typeof cell === 'object' && cell !== null ? cell : { text: cell };
+      return el('td', { className: c.cls || '' }, String(c.text ?? ''));
+    })));
+  }
+  return t;
+}
+
+const card = (title, ...body) => el('div', { className: 'card' }, title ? el('h3', {}, title) : '', ...body);
+
+/* ============================== telemetry UI ============================= */
+
+function renderTelemetry() {
+  const pane = $('#pane-telemetry');
+  if (currentStatus() !== 'connected') return notConnected(pane);
+
+  const content = $('#content');
+  const scroll = content.scrollTop;
+  pane.textContent = '';
+  const t = state.telemetry;
+
+  const block = agentBlock(state.selectedId, 52);
+  block.dataset.agentBlock = '52';
+
+  const auto = el('label', { className: 'field-inline' },
+    (() => {
+      const cb = el('input', { type: 'checkbox', checked: state.autoRefresh, style: 'width:auto' });
+      cb.onchange = () => { state.autoRefresh = cb.checked; syncPolling(); };
+      return cb;
+    })(),
+    el('span', {}, 'Auto-refresh 5s'));
+
+  const now = el('button', { className: 'btn ghost sm', textContent: 'Refresh now' });
+  now.onclick = () => refreshTelemetry();
+
+  pane.append(el('div', { className: 'tel-head' }, block,
+    el('div', { className: 'tel-actions' },
+      t ? el('span', { className: 'muted sm' },
+        state.autoRefresh ? el('span', { className: 'dot-live' }) : '', ' ',
+        `updated ${new Date(t.at).toLocaleTimeString()}`) : '',
+      auto, now)));
+
+  if (!t) {
+    pane.append(card('Collecting telemetry…', el('p', { className: 'muted' }, 'One SSH round trip, sampling CPU and network over 600ms.')));
+    content.scrollTop = scroll;
+    return;
+  }
+
+  /* system + load */
+  pane.append(card('System',
+    el('div', { className: 'stat-row' },
+      stat('Uptime', fmtDuration(t.uptimeSeconds)),
+      stat('Load 1m', t.load.one),
+      stat('Load 5m', t.load.five),
+      stat('Load 15m', t.load.fifteen),
+      stat('Cores', t.cpu.cores || '—')),
+    el('p', { className: 'muted sm', style: 'margin:12px 0 0' },
+      [t.os.pretty, t.os.kernel].filter(Boolean).join(' · ') || 'unknown OS')));
+
+  /* cpu + memory + network side by side */
+  const grid = el('div', { className: 'grid2' });
+
+  grid.append(card('CPU & memory',
+    meter('CPU', t.cpu.percent, `${t.cpu.percent}%`),
+    meter('Memory', t.memory.percent, `${fmtBytes(t.memory.used)} / ${fmtBytes(t.memory.total)}`),
+    t.memory.swapTotal
+      ? meter('Swap', t.memory.swapTotal ? (t.memory.swapUsed / t.memory.swapTotal) * 100 : 0,
+          `${fmtBytes(t.memory.swapUsed)} / ${fmtBytes(t.memory.swapTotal)}`)
+      : el('p', { className: 'muted sm', style: 'margin:0' }, 'No swap configured')));
+
+  grid.append(card('Network',
+    el('div', { className: 'stat-row', style: 'margin-bottom:14px' },
+      stat('Down', fmtRate(t.network.rxRate)),
+      stat('Up', fmtRate(t.network.txRate)),
+      stat('Total in', fmtBytes(t.network.rxTotal)),
+      stat('Total out', fmtBytes(t.network.txTotal))),
+    t.network.interfaces.length
+      ? dataTable(['Interface', 'Down', 'Up', 'In', 'Out'],
+          t.network.interfaces.map((i) => [
+            { text: i.virtual ? `${i.name} (virtual)` : i.name, cls: 'mono' },
+            fmtRate(i.rxRate), fmtRate(i.txRate), fmtBytes(i.rxTotal), fmtBytes(i.txTotal)]))
+      : el('p', { className: 'muted sm' }, 'No interface counters available')));
+
+  pane.append(grid);
+
+  /* storage */
+  pane.append(card('Storage',
+    t.disks.length
+      ? t.disks.map((d) => meter(`${d.mount}  ${d.source}`, d.percent,
+          `${fmtBytes(d.used)} / ${fmtBytes(d.total)} · ${fmtBytes(d.available)} free`))
+      : el('p', { className: 'muted sm' }, 'No filesystems reported')));
+
+  /* processes */
+  pane.append(card(`Top processes  ·  ${t.processes.length}`,
+    el('div', { className: 'scroll-y' },
+      dataTable(['PID', 'User', 'CPU %', 'MEM %', 'RSS', 'Command'],
+        t.processes.map((p) => [
+          p.pid, p.user, p.cpu.toFixed(1), p.mem.toFixed(1), fmtBytes(p.rss),
+          { text: p.command, cls: 'mono' }])))));
+
+  /* hermes processes */
+  pane.append(card('Hermes processes',
+    t.hermes.length
+      ? dataTable(['PID', 'CPU %', 'Uptime', 'Command'],
+          t.hermes.map((p) => [p.pid || '—', p.cpu.toFixed(1), fmtDuration(p.etimeSeconds),
+            { text: p.args, cls: 'mono wrap' }]))
+      : el('p', { className: 'muted sm', style: 'margin:0' }, 'No hermes process running — the agent is asleep.')));
+
+  /* docker */
+  pane.append(renderDockerCard(t.docker));
+
+  /* supabase */
+  pane.append(renderSupabaseCard(t.supabase));
+
+  content.scrollTop = scroll;
+}
+
+function renderDockerCard(d) {
+  const c = el('div', { className: 'card' });
+  c.append(el('div', { className: 'card-head' },
+    el('h3', {}, 'Docker'),
+    el('span', { className: `badge ${d.available ? 'ok' : ''}` }, d.available ? 'available' : 'unavailable')));
+
+  if (!d.available) {
+    c.append(el('p', { className: 'muted sm', style: 'margin:0' }, d.reason || 'not reachable'));
+    return c;
+  }
+
+  c.append(el('h3', { style: 'margin:4px 0 8px' }, `Containers · ${d.containers.length}`));
+  c.append(d.containers.length
+    ? dataTable(['Name', 'Image', 'State', 'Status'],
+        d.containers.map((x) => [x.name, { text: x.image, cls: 'mono' },
+          { text: x.state, cls: /run/i.test(x.state) ? '' : 'muted' }, x.status]))
+    : el('p', { className: 'muted sm' }, 'No running containers'));
+
+  c.append(el('h3', { style: 'margin:16px 0 8px' }, `Images · ${d.images.length}`));
+  c.append(d.images.length
+    ? el('div', { className: 'scroll-y' },
+        dataTable(['Repository', 'Tag', 'Size', 'Created'],
+          d.images.map((x) => [{ text: x.repository, cls: 'mono' }, x.tag, x.size, x.created])))
+    : el('p', { className: 'muted sm' }, 'No images'));
+
+  if (d.usage.length) {
+    c.append(el('h3', { style: 'margin:16px 0 8px' }, 'Disk usage'));
+    c.append(dataTable(['Type', 'Total', 'Active', 'Size', 'Reclaimable'],
+      d.usage.map((u) => [u.type, u.count, u.active, u.size, u.reclaimable])));
+  }
+  return c;
+}
+
+function renderSupabaseCard(sb) {
+  const badge = !sb.detected ? '' : sb.health === 'healthy' ? 'ok' : 'err';
+  const c = el('div', { className: 'card' });
+  c.append(el('div', { className: 'card-head' },
+    el('h3', {}, 'Supabase'),
+    el('span', { className: `badge ${badge}` }, sb.detected ? sb.health : 'not detected')));
+
+  if (sb.containers.length) {
+    c.append(dataTable(['Service', 'Image', 'Status'],
+      sb.containers.map((x) => [x.name, { text: x.image, cls: 'mono' }, x.status])));
+  }
+
+  const probed = sb.ports.filter((p) => p.code);
+  c.append(el('h3', { style: 'margin:16px 0 8px' }, 'Port probes ', el('span', { className: 'muted' }, '· localhost')));
+  c.append(dataTable(['Port', 'Service', 'HTTP'],
+    sb.ports.map((p) => [
+      { text: p.port, cls: 'mono' },
+      p.label || '—',
+      { text: p.code ? p.code : 'closed', cls: p.code ? '' : 'muted' }])));
+
+  if (sb.cli) {
+    c.append(el('h3', { style: 'margin:16px 0 8px' }, 'supabase status'));
+    c.append(el('pre', { className: 'out' }, sb.cli));
+  }
+  if (!sb.detected) {
+    c.append(el('p', { className: 'muted sm', style: 'margin:12px 0 0' },
+      `No Supabase containers, CLI or responding ports found. ${probed.length} of ${sb.ports.length} probed ports answered.`));
+  }
+  return c;
 }

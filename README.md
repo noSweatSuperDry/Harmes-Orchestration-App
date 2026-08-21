@@ -15,6 +15,7 @@ npm start
 | Tab | Backed by | Notes |
 | --- | --- | --- |
 | **Overview** | `hermes --version`, `hermes profile`, `hermes auth list`, `uptime`, `df` | Read-only probes, each with a 10s timeout |
+| **Telemetry** | `/proc`, `df`, `ps`, `docker`, port probes | CPU/memory/disk/network, top processes, Docker, Supabase health. Auto-refreshes every 5s |
 | **Model** | `config.yaml` | `model.default` / `model.provider` as first-class fields, every other scalar key in a flat editable table |
 | **API Keys** | `.env` | Masked values, reveal toggle, add/remove; rewritten in place at mode `600` |
 | **Memory** | `memories/MEMORY.md`, `memories/USER.md`, `SOUL.md` | Plain editors; Hermes snapshots memory at session start |
@@ -22,6 +23,43 @@ npm start
 | **Terminal** | SSH PTY | Real `xterm.js` shell per host, kept alive while you switch tabs |
 
 Each host is independent — its own connection, profile selection, and settings.
+
+### Agent activity
+
+Every host shows an animated avatar reflecting what Hermes is actually doing. The state is derived,
+never faked — from the remote process table (`ps | grep hermes`, polled every 4s) plus live PTY
+output:
+
+| State | Meaning | Animation |
+| --- | --- | --- |
+| **Offline** | not connected | static, dimmed |
+| **Sleeping** | no `hermes` process on the host | slow breathing + drifting `z`s |
+| **Idle** | process alive, under 1.5% CPU | gentle pulse with halo |
+| **Thinking** | 1.5–15% CPU | three bobbing dots |
+| **Working** | over 15% CPU, or bytes streaming to the terminal | spinning arc + fast throb |
+
+Terminal output wins over the CPU poll: if bytes are arriving, the agent is demonstrably busy and
+flips to **Working** within a frame rather than waiting up to 4s for the next poll.
+
+Animation respects `prefers-reduced-motion`, but the sidebar has an **Animation** control
+(`Always on` / `Follow system` / `Off`). It defaults to **Always on** — note that this overrides
+macOS System Settings → Accessibility → Display → **Reduce motion** if you have it enabled.
+
+### Telemetry
+
+One SSH round trip per refresh gathers everything, sampling CPU and network counters twice 600ms
+apart to compute real rates rather than cumulative totals:
+
+- **System** — distro, kernel, uptime, 1/5/15m load, core count
+- **CPU & memory** — CPU% from `/proc/stat` deltas; memory and swap from `/proc/meminfo`
+- **Network** — per-interface up/down rates and lifetime totals; virtual interfaces (`lo`,
+  `docker*`, `veth*`, `br-*`) are flagged and excluded from the headline figures
+- **Storage** — every real filesystem, with tmpfs/overlay/squashfs filtered out
+- **Processes** — top 20 by CPU, plus a dedicated Hermes process table
+- **Docker** — containers, images, and `system df`. Degrades with a specific reason
+  (*permission denied*, *daemon not running*, *not installed*) rather than an empty panel
+- **Supabase** — detected three ways: container names, the `supabase` CLI, and HTTP probes of
+  ports 54321–54324/8000/3000. Reports `healthy` / `degraded` / `not detected`
 
 ## How it talks to the VPS
 

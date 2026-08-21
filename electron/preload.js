@@ -36,6 +36,10 @@ contextBridge.exposeInMainWorld('api', {
     saveEnv: (id, profile, entries) => invoke('hermes:saveEnv', id, profile, entries),
     saveMemory: (id, profile, which, text) => invoke('hermes:saveMemory', id, profile, which, text)
   },
+  telemetry: {
+    collect: (id) => invoke('telemetry:collect', id),
+    pulse: (id) => invoke('telemetry:pulse', id)
+  },
   term: {
     open: (id, termId, opts) => invoke('term:open', id, termId, opts),
     close: (id, termId) => invoke('term:close', id, termId),

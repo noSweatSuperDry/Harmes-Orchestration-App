@@ -202,3 +202,107 @@ table.kv tr.deleted input { opacity: .35; text-decoration: line-through; }
 .toast.ok { border-left-color: var(--ok); }
 .toast.err { border-left-color: var(--err); }
 @keyframes slide { from { opacity: 0; transform: translateY(6px); } }
+
+/* ---------------------------- agent activity ----------------------------- */
+/* State is derived from the remote process table + PTY output, never faked. */
+.agent { display: inline-block; line-height: 0; flex: none; }
+.agent svg { overflow: visible; display: block; }
+.agent .ring  { fill: none; stroke: var(--line); stroke-width: 2.5; }
+.agent .halo  { fill: none; stroke: var(--accent); stroke-width: 2; opacity: 0; }
+.agent .core  { fill: var(--muted); transform-box: fill-box; transform-origin: center; }
+.agent .arc   { fill: none; stroke: var(--ok); stroke-width: 3.5; stroke-linecap: round;
+                transform-box: fill-box; transform-origin: center; opacity: 0; }
+.agent .dots  { opacity: 0; }
+.agent .dot   { fill: var(--warn); transform-box: fill-box; transform-origin: center; }
+.agent .zzz   { opacity: 0; }
+.agent .zzz text { fill: #7b869e; font: 700 11px -apple-system, system-ui, sans-serif; }
+
+/* offline — nothing home */
+.agent[data-state="offline"] .core { fill: #39415a; }
+.agent[data-state="offline"] .ring { stroke: #262c3a; }
+
+/* asleep — hermes not running */
+.agent[data-state="asleep"] .core { fill: #5b6478; animation: breathe 3.6s ease-in-out infinite; }
+.agent[data-state="asleep"] .ring { stroke: #333b4d; }
+.agent[data-state="asleep"] .zzz  { opacity: 1; }
+.agent[data-state="asleep"] .zzz text:nth-child(1) { animation: drift 3.2s ease-out infinite; }
+.agent[data-state="asleep"] .zzz text:nth-child(2) { animation: drift 3.2s ease-out infinite 1.1s; }
+
+/* idle — process alive, waiting on input */
+.agent[data-state="idle"] .core { fill: var(--accent); animation: breathe 2.6s ease-in-out infinite; }
+.agent[data-state="idle"] .ring { stroke: rgba(110,168,254,.3); }
+.agent[data-state="idle"] .halo { animation: halo 2.6s ease-out infinite; }
+
+/* thinking — modest CPU */
+.agent[data-state="thinking"] .core { opacity: 0; }
+.agent[data-state="thinking"] .ring { stroke: rgba(251,191,36,.35); }
+.agent[data-state="thinking"] .dots { opacity: 1; }
+.agent[data-state="thinking"] .dot:nth-child(1) { animation: bob 1.15s ease-in-out infinite; }
+.agent[data-state="thinking"] .dot:nth-child(2) { animation: bob 1.15s ease-in-out infinite .16s; }
+.agent[data-state="thinking"] .dot:nth-child(3) { animation: bob 1.15s ease-in-out infinite .32s; }
+
+/* working — burning CPU or streaming to the terminal */
+.agent[data-state="working"] .core { fill: var(--ok); animation: throb .78s ease-in-out infinite; }
+.agent[data-state="working"] .ring { stroke: rgba(74,222,128,.25); }
+.agent[data-state="working"] .arc  { opacity: 1; animation: spin .95s linear infinite; }
+
+@keyframes breathe { 0%,100% { transform: scale(.82); opacity: .75; } 50% { transform: scale(1.06); opacity: 1; } }
+@keyframes throb   { 0%,100% { transform: scale(.9); } 50% { transform: scale(1.14); } }
+@keyframes spin    { to { transform: rotate(360deg); } }
+@keyframes halo    { 0% { opacity: .5; stroke-width: 2; transform: scale(.7); transform-box: fill-box; transform-origin: center; }
+                     100% { opacity: 0; stroke-width: .5; transform: scale(1.25); transform-box: fill-box; transform-origin: center; } }
+@keyframes bob     { 0%,100% { transform: translateY(3px); opacity: .45; } 50% { transform: translateY(-3px); opacity: 1; } }
+@keyframes drift   { 0% { opacity: 0; transform: translate(0,4px) scale(.7); }
+                     30% { opacity: 1; } 100% { opacity: 0; transform: translate(5px,-9px) scale(1.1); } }
+
+/* Motion is a user choice: "system" honours prefers-reduced-motion, but the
+   toggle in the sidebar can force it on or off regardless. */
+[data-motion="off"] .agent * { animation: none !important; }
+[data-motion="off"] .agent[data-state="thinking"] .core { opacity: 1; }
+[data-motion="off"] .agent[data-state="thinking"] .dots,
+[data-motion="off"] .agent[data-state="working"] .arc { opacity: 1; }
+[data-motion="off"] .dot-live { animation: none; }
+[data-motion="off"] .host-item .dot.connecting { animation: none; }
+
+.agent-block { display: flex; align-items: center; gap: 14px; }
+.agent-block .label { font-size: 15px; font-weight: 600; }
+.agent-block .detail { font-size: 12px; color: var(--muted); }
+
+/* ------------------------------- telemetry -------------------------------- */
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.pane-wide { max-width: 1100px; }
+
+.meter { margin-bottom: 12px; }
+.meter:last-child { margin-bottom: 0; }
+.meter-top { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 5px; gap: 10px; }
+.meter-top .m-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meter-top .m-val { color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
+.meter-track { height: 7px; border-radius: 4px; background: #0b0d12; border: 1px solid var(--line); overflow: hidden; }
+.meter-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .45s ease; }
+.meter-fill.warn { background: var(--warn); }
+.meter-fill.crit { background: var(--err); }
+
+.stat-row { display: flex; flex-wrap: wrap; gap: 20px; }
+.stat { min-width: 96px; }
+.stat .v { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+
+table.data { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.data th {
+  text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); font-weight: 500; padding: 0 10px 6px 0; position: sticky; top: 0; background: var(--bg-2);
+}
+table.data td { padding: 4px 10px 4px 0; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+table.data td.mono { font-family: ui-monospace, Menlo, monospace; }
+table.data td.wrap { word-break: break-all; white-space: normal; }
+table.data tr:hover td { background: rgba(255,255,255,.02); }
+.scroll-y { max-height: 340px; overflow-y: auto; }
+
+.tel-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.tel-actions { display: flex; align-items: center; gap: 10px; }
+.dot-live { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); display: inline-block; animation: pulse 1.6s infinite; }
+
+/* sidebar: agent avatar gives way to the edit affordance on hover */
+.host-item .agent { margin-left: auto; }
+.host-item:hover .agent { display: none; }
+.host-item .edit { margin-left: auto; }

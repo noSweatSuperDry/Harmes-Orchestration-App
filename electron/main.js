@@ -4,6 +4,7 @@ const path = require('path');
 const store = require('./store');
 const ssh = require('./ssh-manager');
 const hermes = require('./hermes');
+const telemetry = require('./telemetry');
 
 let win = null;
 
@@ -105,6 +106,9 @@ handle('hermes:saveEnv', (id, profile, entries) =>
   hermes.saveEnv(id, profile, entries, hostOf(id).hermesHome));
 handle('hermes:saveMemory', (id, profile, which, text) =>
   hermes.saveMemory(id, profile, which, text, hostOf(id).hermesHome));
+
+handle('telemetry:collect', (id) => telemetry.collect(id));
+handle('telemetry:pulse', (id) => telemetry.pulse(id));
 
 handle('term:open', (id, termId, opts) => ssh.openShell(id, termId, opts));
 handle('term:close', (id, termId) => { ssh.closeShell(id, termId); return true; });
